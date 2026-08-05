@@ -217,6 +217,16 @@ jobs:
           name: apt-root
           path: apt-root/
 
+      - name: 检出 main 分支 (用于读 site/index.html + 后续更新 version.txt)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          path: main-branch
+          fetch-depth: 1
+          # persist-credentials 默认 true, 会把 GITHUB_TOKEN 写进 .git/config
+          # 这样后面 git push 不需要再嵌入 token
+          persist-credentials: true
+
       - name: 配置 git
         run: |
           git config --global user.name  "github-actions[bot]"
@@ -228,7 +238,7 @@ jobs:
         run: |
           set -euo pipefail
           # 永远创建 fresh orphan 分支 - 历史永远只有 1 个 commit
-          # 分支体积恒等于当前 deb 大小, 不会随版本累积膨胀
+          # 分支体积恒等于当前 deb 大小 + 主页 HTML, 不会随版本累积膨胀
           # 发布历史通过 main 分支的 version.txt commit log 保留
           mkdir -p apt-branch
           cd apt-branch
@@ -242,8 +252,17 @@ jobs:
           set -euo pipefail
           cd apt-branch
 
-          # 复制新构建产物
+          # 复制新构建产物 (dists/stable/...)
           cp -a ../apt-root/. .
+
+          # 复制主页 index.html (用于 GitHub Pages / Cloudflare Pages 部署)
+          # 主页源文件在 main 分支的 site/ 目录, 由前面 checkout 步骤提供
+          if [ -f ../main-branch/site/index.html ]; then
+            cp ../main-branch/site/index.html ./index.html
+            echo "✓ 已复制主页 index.html"
+          else
+            echo "::warning::未找到 site/index.html, 跳过主页部署"
+          fi
 
           # 写一个 README 给访问者
           cat > README.md <<'README_EOF'
@@ -264,12 +283,13 @@ jobs:
           ## 分支内容
 
           这是一个 orphan 分支 (单 commit, 每次发布重置历史),
-          只包含 apt 源文件:
+          只包含 apt 源文件 + 一个主页 index.html:
 
           ```
-          dists/stable/Release
-          dists/stable/main/binary-aarch64/Packages
-          dists/stable/main/binary-aarch64/Packages.gz
+          index.html                                       # 项目主页 (GitHub Pages / Cloudflare Pages 用)
+          dists/stable/Release                             # apt 元数据
+          dists/stable/main/binary-aarch64/Packages        # 包索引
+          dists/stable/main/binary-aarch64/Packages.gz     # 包索引 (gzip)
           dists/stable/main/binary-aarch64/reasonix_<version>_aarch64.deb
           ```
 
@@ -305,16 +325,6 @@ jobs:
           # 优势: 分支体积 ≈ 当前 deb 大小, 不随版本累积
           # 发布历史通过 main 分支的 version.txt commit log 保留
           git push origin ${{ env.APT_BRANCH }} --force
-
-      - name: 检出 main 分支以更新 version.txt
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.ref_name }}
-          path: main-branch
-          fetch-depth: 1
-          # persist-credentials 默认 true, 会把 GITHUB_TOKEN 写进 .git/config
-          # 这样后面 git push 不需要再嵌入 token
-          persist-credentials: true
 
       - name: 在 main 分支提交 version.txt
         run: |
@@ -364,9 +374,17 @@ jobs:
           ### apt 分支上的文件:
 
           \`\`\`
+          index.html                                          # 项目主页 (Pages 部署用)
           dists/stable/Release
           dists/stable/main/binary-aarch64/Packages
           dists/stable/main/binary-aarch64/Packages.gz
           dists/stable/main/binary-aarch64/reasonix_${UPSTREAM_TAG#v}_aarch64.deb
           \`\`\`
+
+          ### 主页访问 (启用 GitHub Pages / Cloudflare Pages 后):
+
+          - GitHub Pages: \`https://${GITHUB_REPOSITORY%/*}.github.io/${GITHUB_REPOSITORY#*/}/\`
+            (仓库 Settings → Pages → Source = apt 分支)
+          - Cloudflare Pages: 自定义域名 (Production branch = apt)
+          - 直接访问 raw: \`https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${{ env.APT_BRANCH }}/index.html\`
           EOF

@@ -1,0 +1,359 @@
+name: 同步并发布 Termux 源
+
+# ---------------------------------------------------------------------------
+# 自动检测 esengine/DeepSeek-Reasonix 上游 CLI 版本变化
+# 构建 GOOS=android GOARCH=arm64 静态二进制 + deb 包 + apt 源元数据
+# 发布到本仓库的 orphan 分支 `apt`（类似 gh-pages 模式）
+#
+# 上游:    https://github.com/esengine/DeepSeek-Reasonix
+# 安装源:  deb [trusted=yes] https://raw.githubusercontent.com/<OWNER>/<REPO>/apt stable main
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    # 每 6 小时检查一次上游 (UTC 00:30/06:30/12:30/18:30 -> Asia/Shanghai 08:30/14:30/20:30/02:30)
+    - cron: '30 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "强制重新构建（即使上游无更新）"
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      tag:
+        description: "指定上游 tag 覆盖自动检测 (例: v1.19.7)"
+        required: false
+        type: string
+
+permissions:
+  contents: write    # 需要 push 到 apt 分支 + commit version.txt
+  actions: read
+
+concurrency:
+  group: termux-sync
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: esengine/DeepSeek-Reasonix
+  # Termux apt 架构名 (注意: 是 aarch64 不是 arm64)
+  TERMUX_ARCH: aarch64
+  # Go 目标
+  GOOS_TARGET: android
+  GOARCH_TARGET: arm64
+  # 发布分支 - orphan, 类似 gh-pages, 只放 apt 源文件
+  APT_BRANCH: apt
+  APT_DIST: stable
+  APT_COMPONENT: main
+  # Termux 安装前缀 (deb 数据文件路径)
+  TERMUX_PREFIX: /data/data/com.termux/files/usr
+
+jobs:
+  detect:
+    name: 检测上游版本
+    runs-on: ubuntu-latest
+    outputs:
+      upstream_tag: ${{ steps.check.outputs.upstream_tag }}
+      current_tag: ${{ steps.check.outputs.current_tag }}
+      should_publish: ${{ steps.check.outputs.should_publish }}
+    steps:
+      - name: 检出本仓库 (main 分支, 用于读 version.txt)
+        uses: actions/checkout@v7
+
+      - name: 读取当前已发布版本
+        id: current
+        run: |
+          if [ -f version.txt ]; then
+            CUR=$(tr -d '[:space:]' < version.txt)
+          else
+            CUR="none"
+          fi
+          echo "current=$CUR" >> "$GITHUB_OUTPUT"
+          echo "::notice::当前已发布版本: $CUR"
+
+      - name: 查询上游最新 CLI tag
+        id: upstream
+        run: |
+          # GitHub API 取上游最新 non-prerelease CLI release (v* tag, 排除 desktop-v*)
+          UPSTREAM=$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "User-Agent: termux-sync-bot" \
+            "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
+            | jq -r '.tag_name')
+          if [ -z "$UPSTREAM" ] || [ "$UPSTREAM" = "null" ]; then
+            echo "::error::无法获取上游最新 tag"
+            exit 1
+          fi
+          echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
+          echo "::notice::上游最新 CLI tag: $UPSTREAM"
+
+      - name: 决定是否需要发布
+        id: check
+        run: |
+          UP="${{ inputs.tag || steps.upstream.outputs.upstream }}"
+          CUR="${{ steps.current.outputs.current }}"
+          FORCE="${{ inputs.force || 'false' }}"
+
+          echo "upstream_tag=$UP" >> "$GITHUB_OUTPUT"
+          echo "current_tag=$CUR" >> "$GITHUB_OUTPUT"
+
+          if [ "$FORCE" = "true" ]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::决策: 发布 (force=true, tag=$UP)"
+          elif [ "$UP" != "$CUR" ]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::决策: 发布 (上游=$UP 与当前=$CUR 不一致)"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::决策: 跳过 (已处于 $CUR)"
+          fi
+
+  build:
+    name: 构建二进制 + deb + apt 源
+    needs: detect
+    if: needs.detect.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+    steps:
+      - name: 检出本仓库 (main 分支)
+        uses: actions/checkout@v7
+
+      - name: 检出上游 Reasonix (tag ${{ env.UPSTREAM_TAG }})
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ env.UPSTREAM_TAG }}
+          path: upstream
+          fetch-depth: 1
+
+      - name: 配置 Go 环境
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: upstream/go.mod
+          cache: false
+
+      - name: 构建 Reasonix (GOOS=android GOARCH=arm64)
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          TAG="${UPSTREAM_TAG}"
+          VER="${TAG#v}"
+          COMMIT=$(git -C . rev-parse --short HEAD)
+
+          mkdir -p ../build
+          echo "::group::go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0)"
+          # 用户要求: GOOS=android GOARCH=arm64
+          # CGO_ENABLED=0 -> 纯静态 ELF, Termux (bionic libc) 可直接运行
+          # 若未来 Go 拒绝 GOOS=android + CGO_ENABLED=0, 自动回退 GOOS=linux
+          if ! (CGO_ENABLED=0 \
+                GOOS=${{ env.GOOS_TARGET }} \
+                GOARCH=${{ env.GOARCH_TARGET }} \
+                go build \
+                  -trimpath \
+                  -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
+                  -o ../build/reasonix \
+                  ./cmd/reasonix); then
+            echo "::warning::GOOS=android 构建失败, 回退到 GOOS=linux (Termux 仍可运行)"
+            CGO_ENABLED=0 \
+            GOOS=linux \
+            GOARCH=${{ env.GOARCH_TARGET }} \
+            go build \
+              -trimpath \
+              -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
+              -o ../build/reasonix \
+              ./cmd/reasonix
+          fi
+          echo "::endgroup::"
+
+          file ../build/reasonix
+          ls -lh ../build/reasonix
+
+      - name: 打包 .deb
+        run: |
+          set -euo pipefail
+          bash scripts/build-deb.sh \
+            "${UPSTREAM_TAG}" \
+            "${{ env.TERMUX_ARCH }}" \
+            "${{ env.TERMUX_PREFIX }}" \
+            build/reasonix \
+            build/
+
+      - name: 生成 apt 源元数据
+        run: |
+          set -euo pipefail
+          bash scripts/build-apt-repo.sh \
+            build/ \
+            "${{ env.APT_DIST }}" \
+            "${{ env.APT_COMPONENT }}" \
+            "${{ env.TERMUX_ARCH }}" \
+            apt-root/
+
+      - name: 显示 apt 源目录树
+        run: find apt-root -type f -exec ls -lh {} \;
+
+      - name: 上传 apt-root 为 workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: apt-root
+          path: apt-root/
+          retention-days: 7
+
+  publish:
+    name: 发布到 orphan `apt` 分支
+    needs: [detect, build]
+    runs-on: ubuntu-latest
+    env:
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+    steps:
+      - name: 下载 apt-root artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: apt-root
+          path: apt-root/
+
+      - name: 配置 git
+        run: |
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: 初始化 fresh orphan apt 分支 (始终单 commit)
+        run: |
+          set -euo pipefail
+          # 永远创建 fresh orphan 分支 - 历史永远只有 1 个 commit
+          # 分支体积恒等于当前 deb 大小, 不会随版本累积膨胀
+          # 发布历史通过 main 分支的 version.txt commit log 保留
+          mkdir -p apt-branch
+          cd apt-branch
+          git init -b ${{ env.APT_BRANCH }}
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+
+      - name: 用新构建产物替换 apt 分支内容
+        run: |
+          set -euo pipefail
+          cd apt-branch
+
+          # 复制新构建产物
+          cp -a ../apt-root/. .
+
+          # 写一个 README 给访问者
+          cat > README.md <<'README_EOF'
+          # Reasonix Termux APT 源 (自动发布)
+
+          最新版本: ${UPSTREAM_TAG}
+
+          ## 安装方法 (在 Termux 中)
+
+          ```bash
+          echo 'deb [trusted=yes] https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/apt stable main' \
+            > $PREFIX/etc/apt/sources.list.d/reasonix.list
+          pkg update
+          pkg install reasonix
+          reasonix --version
+          ```
+
+          ## 分支内容
+
+          这是一个 orphan 分支 (单 commit, 每次发布重置历史),
+          只包含 apt 源文件:
+
+          ```
+          dists/stable/Release
+          dists/stable/main/binary-aarch64/Packages
+          dists/stable/main/binary-aarch64/Packages.gz
+          dists/stable/main/binary-aarch64/reasonix_<version>_aarch64.deb
+          ```
+
+          源 workflow 在 main 分支上。
+          README_EOF
+
+          # 把 ${UPSTREAM_TAG} 和 ${GITHUB_REPOSITORY} 填进 README
+          # (上面的 'README_EOF' 用了单引号防止 $ 提前展开, 这里手动替换)
+          sed -i \
+            -e "s|\${UPSTREAM_TAG}|${UPSTREAM_TAG}|g" \
+            -e "s|\${GITHUB_REPOSITORY}|${GITHUB_REPOSITORY}|g" \
+            README.md
+
+          # 显示将要提交的内容
+          echo "--- 待提交文件 ---"
+          find . -mindepth 1 -maxdepth 5 -not -path './.git*' -type f | sort
+
+          git add -A
+          git status
+
+      - name: 提交并 force-push 到 apt 分支 (orphan, 单 commit)
+        run: |
+          set -euo pipefail
+          cd apt-branch
+
+          # orphan commit - 没有父 commit
+          git commit --allow-empty -m "发布 reasonix ${UPSTREAM_TAG}
+
+          构建参数: GOOS=android GOARCH=arm64 CGO_ENABLED=0
+          上游源码: https://github.com/${{ env.UPSTREAM_REPO }}/releases/tag/${UPSTREAM_TAG}"
+
+          # Force push - orphan 分支每次都覆盖, 永远只有 1 个 commit
+          # 优势: 分支体积 ≈ 当前 deb 大小, 不随版本累积
+          # 发布历史通过 main 分支的 version.txt commit log 保留
+          git push origin ${{ env.APT_BRANCH }} --force
+
+      - name: 检出 main 分支以更新 version.txt
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+          path: main-branch
+          fetch-depth: 1
+
+      - name: 在 main 分支提交 version.txt
+        run: |
+          set -euo pipefail
+          cd main-branch
+          echo "${UPSTREAM_TAG}" > version.txt
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add version.txt
+          if git diff --cached --quiet; then
+            echo "version.txt 未变化"
+          else
+            git commit -m "chore: 已发布版本更新为 ${UPSTREAM_TAG}"
+            git push
+          fi
+
+      - name: 汇总
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## 已发布: \`${UPSTREAM_TAG}\`
+
+          推送到 orphan 分支 \`${{ env.APT_BRANCH }}\` (force-push, 单 commit)。
+
+          ### Termux 安装命令:
+
+          \`\`\`bash
+          echo 'deb [trusted=yes] https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${{ env.APT_BRANCH }} stable main' \\
+            > \$PREFIX/etc/apt/sources.list.d/reasonix.list
+          pkg update
+          pkg install reasonix
+          reasonix --version
+          \`\`\`
+
+          ### 备用镜像 (如果 raw.githubusercontent.com 被墙):
+
+          \`\`\`bash
+          # jsDelivr CDN (海外更快, 国内有时被墙)
+          echo 'deb [trusted=yes] https://cdn.jsdelivr.net/gh/${GITHUB_REPOSITORY}@${{ env.APT_BRANCH }} stable main' \\
+            > \$PREFIX/etc/apt/sources.list.d/reasonix.list
+
+          # GitHub /raw/ URL (同 raw, 走 github.com 域名)
+          echo 'deb [trusted=yes] https://github.com/${GITHUB_REPOSITORY}/raw/${{ env.APT_BRANCH }} stable main' \\
+            > \$PREFIX/etc/apt/sources.list.d/reasonix.list
+          \`\`\`
+
+          ### apt 分支上的文件:
+
+          \`\`\`
+          dists/stable/Release
+          dists/stable/main/binary-aarch64/Packages
+          dists/stable/main/binary-aarch64/Packages.gz
+          dists/stable/main/binary-aarch64/reasonix_${UPSTREAM_TAG#v}_aarch64.deb
+          \`\`\`
+          EOF

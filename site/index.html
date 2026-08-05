@@ -1,0 +1,1213 @@
+<!DOCTYPE html>
+<html lang="zh-CN" dir="ltr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reasonix Termux — DeepSeek 编码 agent · Android/Termux 版</title>
+  <meta name="description" content="自动同步上游 esengine/DeepSeek-Reasonix，构建 Android/aarch64 静态二进制，通过 GitHub orphan 分支提供 apt 源。一行命令装到 Termux。">
+  <meta name="author" content="reasonix-termux">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Reasonix Termux">
+  <meta property="og:description" content="DeepSeek-native AI coding agent for Termux (Android/aarch64)">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232563EB' stroke-width='2.5'%3E%3Cpath d='M5 12l5 5L20 7'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.font.im">
+  <link rel="stylesheet" href="https://fonts.font.im/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
+  <style>
+    /* === 设计 brief ===
+       参考 reasonix.io 官网设计语言:
+         - 冷灰背景 (slate-50 #F8FAFC, 非暖白)
+         - 科技蓝主色 (#2563EB, 与上游品牌一致)
+         - Sans + Mono 混搭标题 (sans 为主, 关键词用 mono + 浅背景框)
+         - inline terminal keyword 作为 signature element
+         - 8px 中圆角 + 极弱阴影
+         - 章节加 01/02/03 编号 (reasonix 官网在用)
+       UI UX Pro Max Rule 81 (Developer Tool):
+         Pattern: Minimal + Documentation
+         Typography: JetBrains Mono + IBM Plex Sans
+    */
+    :root {
+      /* reasonix.io 风格冷灰背景 + 科技蓝 */
+      --bg:        #F8FAFC;   /* slate-50 冷灰底 */
+      --surface:   #FFFFFF;   /* 卡片纯白 */
+      --surface-2: #F1F5F9;   /* slate-100 次级面板 */
+      --border:    #E2E8F0;   /* slate-200 细边 */
+      --border-2:  #CBD5E1;   /* slate-300 强调边 */
+      --text:      #0F172A;   /* slate-900 主文字 */
+      --text-sub:  #475569;   /* slate-600 次文字 */
+      --text-mute: #94A3B8;   /* slate-400 弱化 */
+      --accent:    #2563EB;   /* blue-600 主色 (与 reasonix 一致) */
+      --accent-dk: #1D4ED8;   /* blue-700 hover */
+      --accent-bg: #EFF6FF;   /* blue-50 浅蓝背景 */
+      --accent-2:  #10B981;   /* emerald-500 辅色 (status dot) */
+      --code-bg:   #0F172A;   /* slate-900 代码块深色 */
+      --code-fg:   #F8FAFC;
+      --code-prompt: #10B981; /* emerald-500 prompt */
+      --code-comment: #64748B;
+      --code-str:  #FBBF24;
+      --code-kw:   #F472B6;
+      --code-var:  #A78BFA;
+      --code-info: #60A5FA;
+      --code-ok:   #10B981;
+      --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+      --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.06);
+      --radius:    8px;
+      --radius-sm: 6px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    /* 兜底: 防止任何元素溢出导致整页横向滚动 */
+    html, body {
+      max-width: 100%;
+      overflow-x: hidden;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      -webkit-text-size-adjust: 100%;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+    a { color: inherit; text-decoration: none; }
+    a:focus-visible, button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+
+    /* === 容器 === */
+    .container { max-width: 1080px; margin: 0 auto; padding: 0 24px; min-width: 0; }
+
+    /* === 顶部导航 === */
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(250, 250, 247, 0.88);
+      backdrop-filter: saturate(180%) blur(10px);
+      -webkit-backdrop-filter: saturate(180%) blur(10px);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      max-width: 1080px;
+      margin: 0 auto;
+      gap: 16px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      font-size: 15px;
+      color: var(--text);
+      cursor: pointer;
+      letter-spacing: -0.01em;
+    }
+    .brand-mark {
+      width: 22px;
+      height: 22px;
+      background: var(--text);
+      color: var(--accent);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .brand-mark svg { width: 14px; height: 14px; }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+      font-size: 14px;
+      color: var(--text-sub);
+      font-weight: 500;
+    }
+    .nav-links a { cursor: pointer; transition: color 0.15s; }
+    .nav-links a:hover { color: var(--text); }
+
+    .nav-actions { display: flex; align-items: center; gap: 12px; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 16px;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: 1px solid transparent;
+      font-family: inherit;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .btn-primary {
+      background: var(--text);
+      color: #fff;
+      box-shadow: var(--shadow-sm);
+    }
+    .btn-primary:hover {
+      background: #1E293B;
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-md);
+    }
+    .btn-accent {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: var(--shadow-sm);
+    }
+    .btn-accent:hover {
+      background: var(--accent-dk);
+      color: #fff;
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-md);
+    }
+    .btn-ghost {
+      background: var(--surface);
+      color: var(--text);
+      border-color: var(--border-2);
+      box-shadow: var(--shadow-sm);
+    }
+    .btn-ghost:hover {
+      border-color: var(--text-sub);
+      background: var(--surface-2);
+    }
+
+    .menu-btn {
+      display: none;
+      background: transparent;
+      border: 1px solid var(--border-2);
+      color: var(--text);
+      width: 40px;
+      height: 40px;
+      border-radius: 6px;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+    }
+    .menu-btn svg { width: 20px; height: 20px; }
+
+    /* 移动端菜单 */
+    .mobile-menu {
+      display: none;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+    }
+    .mobile-menu.open { display: block; }
+    .mobile-menu a {
+      display: block;
+      padding: 10px 0;
+      color: var(--text-sub);
+      font-weight: 500;
+      border-bottom: 1px solid var(--border);
+    }
+    .mobile-menu a:last-child { border-bottom: none; }
+    .mobile-menu .btn { width: 100%; justify-content: center; margin-top: 12px; }
+
+    /* === Hero === */
+    .hero { padding: 96px 0 80px; position: relative; }
+    .hero-inner {
+      position: relative;
+      max-width: 780px;
+    }
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 6px 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--text-sub);
+      letter-spacing: 0.01em;
+      margin-bottom: 32px;
+      font-weight: 500;
+      padding: 6px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      box-shadow: var(--shadow-sm);
+      max-width: 100%;
+      overflow-wrap: anywhere;
+    }
+    .eyebrow .dot {
+      width: 8px;
+      height: 8px;
+      background: var(--accent-2);
+      border-radius: 50%;
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+      animation: pulse 2.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18); }
+      50%      { box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.28); }
+    }
+    .eyebrow .sep { color: var(--text-mute); margin: 0 2px; }
+
+    .hero h1 {
+      font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      font-weight: 600;
+      font-size: clamp(34px, 6.5vw, 60px);
+      line-height: 1.08;
+      letter-spacing: -0.025em;
+      margin: 0 0 28px;
+      color: var(--text);
+    }
+    .hero h1 .accent { color: var(--accent); }
+    /* signature element: inline terminal keyword
+       参考 reasonix.io — 标题里的关键词用 mono 字体 + 浅背景框, 模拟终端输入 */
+    .hero h1 .term {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      background: var(--surface);
+      color: var(--text);
+      padding: 0.05em 0.4em;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      box-shadow: 0 2px 0 var(--border), var(--shadow-sm);
+      font-size: 0.88em;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+    .hero h1 .term::after {
+      content: '▎';
+      color: var(--accent-2);
+      margin-left: 0.1em;
+      font-weight: 400;
+      animation: blink 1.1s steps(1) infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+    @media (prefers-reduced-motion: reduce) {
+      .eyebrow .dot { animation: none; }
+      .hero h1 .term::after { animation: none; }
+    }
+
+    .hero .lead {
+      font-size: clamp(15px, 1.8vw, 18px);
+      color: var(--text-sub);
+      max-width: 600px;
+      margin: 0 0 40px;
+      line-height: 1.7;
+      font-weight: 400;
+    }
+    .hero .lead strong { color: var(--text); font-weight: 600; }
+
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 64px; }
+
+    .hero-stats {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+      max-width: 560px;
+      padding: 24px 0;
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+    .stat-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 28px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.02em;
+      margin-bottom: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-num .unit { font-size: 16px; color: var(--text-mute); margin-left: 2px; }
+    .stat-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--text-sub);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: 500;
+    }
+
+    /* === 章节 === */
+    section { padding: 88px 0; border-top: 1px solid var(--border); }
+    .section-head { margin-bottom: 48px; max-width: 680px; }
+    .section-eyebrow {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--accent-dk);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      font-weight: 600;
+    }
+    .section-title {
+      font-family: 'IBM Plex Sans', system-ui, sans-serif;
+      font-size: clamp(26px, 4vw, 36px);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0 0 14px;
+      color: var(--text);
+      line-height: 1.15;
+    }
+    .section-sub {
+      color: var(--text-sub);
+      font-size: 17px;
+      margin: 0;
+      line-height: 1.6;
+    }
+
+    /* === 特性卡片 (参考 reasonix.io: 分卡 + 编号 + 微阴影) === */
+    .features {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 20px;
+    }
+    .feature {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
+      transition: all 0.2s ease;
+      box-shadow: var(--shadow-sm);
+      position: relative;
+      min-width: 0;
+      overflow-wrap: break-word;
+      word-break: break-word;
+    }
+    .feature:hover {
+      border-color: var(--border-2);
+      box-shadow: var(--shadow-md);
+      transform: translateY(-2px);
+    }
+    .feature-num {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--text-mute);
+      font-weight: 500;
+      margin-bottom: 14px;
+      letter-spacing: 0.02em;
+    }
+    .feature-num .slash { color: var(--border-2); margin: 0 4px; }
+    .feature-icon {
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+      color: var(--accent);
+      background: var(--accent-bg);
+      border-radius: var(--radius-sm);
+    }
+    .feature-icon svg { width: 20px; height: 20px; }
+    .feature h3 {
+      font-family: 'IBM Plex Sans', sans-serif;
+      font-size: 17px;
+      font-weight: 600;
+      margin: 0 0 8px;
+      color: var(--text);
+      letter-spacing: -0.01em;
+    }
+    .feature p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--text-sub);
+      line-height: 1.6;
+    }
+    .feature-tag {
+      display: inline-block;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-sub);
+      margin-top: 14px;
+      padding: 3px 8px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-weight: 500;
+    }
+
+    /* === 代码块 + 复制按钮 === */
+    .code-block {
+      position: relative;
+      background: var(--code-bg);
+      color: var(--code-fg);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid #0F172A;
+    }
+    .code-block-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      background: rgba(0, 0, 0, 0.2);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .code-block-label {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--code-comment);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .code-block-label::before {
+      content: '▎';
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .copy-btn {
+      background: transparent;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: var(--code-comment);
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .copy-btn:hover {
+      color: var(--code-fg);
+      border-color: rgba(255, 255, 255, 0.3);
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .copy-btn.copied {
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    .copy-btn svg { width: 12px; height: 12px; }
+    .code-block pre {
+      margin: 0;
+      padding: 16px 18px;
+      overflow-x: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      max-width: 100%;
+      -webkit-overflow-scrolling: touch;
+      tab-size: 2;
+    }
+    .code-block pre code {
+      display: block;
+      white-space: pre;
+      word-break: normal;
+      overflow-wrap: normal;
+    }
+    .c-prompt { color: var(--code-prompt); font-weight: 600; }
+    .c-comment { color: var(--code-comment); font-style: italic; }
+    .c-str { color: var(--code-str); }
+    .c-kw { color: var(--code-kw); }
+    .c-var { color: var(--code-var); }
+    .c-info { color: var(--code-info); }
+    .c-ok { color: var(--code-ok); font-weight: 600; }
+
+    /* === 安装步骤 === */
+    .install-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+    .install-step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .install-step-head {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .install-step-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .install-step-desc {
+      font-size: 14px;
+      color: var(--text-sub);
+      margin: 0 0 16px;
+      line-height: 1.6;
+    }
+
+    .callout {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      padding: 20px 24px;
+      margin-top: 24px;
+    }
+    .callout-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 0 0 8px;
+      color: var(--text);
+    }
+    .callout p {
+      margin: 0 0 12px;
+      font-size: 14px;
+      color: var(--text-sub);
+      line-height: 1.6;
+    }
+    .callout p:last-child, .callout .code-block:last-child { margin-bottom: 0; }
+
+    /* === 镜像表格 === */
+    .table-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .table-scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 600px; }
+    th {
+      text-align: left;
+      padding: 14px 20px;
+      background: var(--surface-2);
+      color: var(--text-sub);
+      font-weight: 500;
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--border);
+    }
+    td {
+      padding: 14px 20px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:nth-child(even) td { background: var(--surface-2); }
+    tr:hover td { background: var(--accent-bg); }
+    .t-name {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .t-url {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--accent-dk);
+      font-size: 12px;
+      word-break: break-all;
+    }
+    .t-desc { color: var(--text-sub); font-size: 13px; }
+    .table-footnote {
+      margin-top: 16px;
+      font-size: 14px;
+      color: var(--text);
+      line-height: 1.7;
+      font-weight: 500;
+    }
+    .table-footnote code, .inline-code {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--accent-bg);
+      padding: 3px 7px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: var(--accent-dk);
+      border: 1px solid var(--border);
+      word-break: break-all;
+      overflow-wrap: anywhere;
+      display: inline-block;
+      max-width: 100%;
+      font-weight: 600;
+    }
+
+    /* === Footer === */
+    footer {
+      background: var(--surface);
+      padding: 48px 0 32px;
+      border-top: 1px solid var(--border);
+    }
+    .footer-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 48px;
+      margin-bottom: 32px;
+    }
+    .footer-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 12px;
+      font-size: 14px;
+    }
+    .footer-desc {
+      font-size: 13px;
+      color: var(--text-sub);
+      max-width: 420px;
+      line-height: 1.65;
+      margin: 0;
+    }
+    .footer-links {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 14px;
+    }
+    .footer-links a {
+      color: var(--text-sub);
+      cursor: pointer;
+      transition: color 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .footer-links a:hover { color: var(--accent-dk); }
+    .footer-meta {
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-mute);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 16px;
+    }
+
+    /* === 滚动条 === */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: var(--surface-2); }
+    ::-webkit-scrollbar-thumb {
+      background: var(--border-2);
+      border-radius: 5px;
+      border: 2px solid var(--surface-2);
+    }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-mute); }
+
+    /* === 响应式 === */
+    @media (max-width: 880px) {
+      .features { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 720px) {
+      .nav-links, .nav-actions .btn { display: none; }
+      .menu-btn { display: flex; }
+      .hero { padding: 56px 0 48px; }
+      .hero::before { font-size: 180px; right: -20px; top: 20px; }
+      .hero-stats { grid-template-columns: 1fr; gap: 16px; padding: 16px 0; }
+      .hero-stats .stat-num { font-size: 22px; }
+      section { padding: 56px 0; }
+      .features { grid-template-columns: 1fr; }
+      .footer-grid { grid-template-columns: 1fr; gap: 32px; }
+      .container { padding: 0 20px; }
+      .nav-inner { padding: 12px 20px; }
+      
+      /* 移动端表格转卡片布局 */
+      .table-wrap .table-scroll { overflow: visible; }
+      .table-wrap table { min-width: 0; }
+      .table-wrap thead { display: none; }
+      .table-wrap tbody { display: block; }
+      .table-wrap tr {
+        display: block;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface) !important;
+      }
+      .table-wrap tr:nth-child(even) td { background: transparent; }
+      .table-wrap tr:hover td { background: transparent; }
+      .table-wrap td {
+        display: block;
+        padding: 4px 0;
+        border-bottom: none;
+      }
+      .table-wrap .t-name {
+        font-size: 15px;
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .table-wrap .t-url {
+        font-size: 12px;
+        margin-bottom: 6px;
+        word-break: break-all;
+      }
+      .table-wrap .t-desc {
+        font-size: 13px;
+        color: var(--text-sub);
+      }
+      .table-wrap .t-desc::before {
+        content: '— ';
+        color: var(--text-mute);
+      }
+    }
+    @media (max-width: 480px) {
+      .hero h1 { font-size: 28px; }
+      .hero .lead { font-size: 15px; }
+      .hero-actions .btn { flex: 1; justify-content: center; }
+      .code-block pre { font-size: 12px; padding: 14px; }
+      .install-step { padding: 20px; }
+      .feature { padding: 22px; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ==================== 顶部导航 ==================== -->
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="#top" class="brand">
+        <span class="brand-mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 12l5 5L20 7"/>
+          </svg>
+        </span>
+        <span>reasonix-termux</span>
+      </a>
+      <div class="nav-links">
+        <a href="#features">特性</a>
+        <a href="#install">安装</a>
+        <a href="#mirrors">镜像</a>
+        <a href="https://github.com/esengine/DeepSeek-Reasonix" target="_blank" rel="noopener">上游 ↗</a>
+      </div>
+      <div class="nav-actions">
+        <a href="#install" class="btn btn-accent">一键安装</a>
+      </div>
+      <button class="menu-btn" id="menu-btn" aria-label="切换菜单" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+    </div>
+  </nav>
+  <div class="mobile-menu" id="mobile-menu">
+    <a href="#features">特性</a>
+    <a href="#install">安装</a>
+    <a href="#mirrors">镜像</a>
+    <a href="https://github.com/esengine/DeepSeek-Reasonix" target="_blank" rel="noopener">上游 ↗</a>
+    <a href="#install" class="btn btn-accent">一键安装</a>
+  </div>
+
+  <!-- ==================== Hero ==================== -->
+  <header id="top" class="hero">
+    <div class="container">
+      <div class="hero-inner">
+        <div class="eyebrow">
+          <span class="dot"></span>
+          <span>auto-sync</span>
+          <span class="sep">·</span>
+          <span>v1.20.0</span>
+          <span class="sep">·</span>
+          <span>aarch64</span>
+          <span class="sep">·</span>
+          <span>GOOS=android</span>
+        </div>
+        <h1>
+          DeepSeek 编码 agent，<br>
+          装进 <span class="term">Termux</span>
+        </h1>
+        <p class="lead">
+          自动同步上游 <strong>esengine/DeepSeek-Reasonix</strong>，构建 Android/aarch64 静态二进制，
+          通过 GitHub orphan 分支提供 apt 源。<strong>一行命令装到手机</strong>，每 6 小时检查更新。
+        </p>
+        <div class="hero-actions">
+          <a href="#install" class="btn btn-accent">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 12l5 5L20 7"/>
+            </svg>
+            一键安装
+          </a>
+          <a href="https://github.com/esengine/DeepSeek-Reasonix" target="_blank" rel="noopener" class="btn btn-ghost">查看上游</a>
+        </div>
+        <div class="hero-stats">
+          <div>
+            <div class="stat-num">11.2<span class="unit">MB</span></div>
+            <div class="stat-label">deb 大小</div>
+          </div>
+          <div>
+            <div class="stat-num">6<span class="unit">h</span></div>
+            <div class="stat-label">自动同步</div>
+          </div>
+          <div>
+            <div class="stat-num">0</div>
+            <div class="stat-label">运行时依赖</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ==================== 特性 ==================== -->
+  <section id="features">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-eyebrow">// features</div>
+        <h2 class="section-title">为 Termux 量身定制的发布管道</h2>
+        <p class="section-sub">不是简单的二进制分发。从上游检测、跨平台编译、deb 打包到 apt 源发布，全自动化。</p>
+      </div>
+      <div class="features">
+
+        <article class="feature">
+          <div class="feature-num">01 <span class="slash">/</span> auto-sync</div>
+          <div class="feature-icon">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+          </div>
+          <h3>每 6 小时自动同步</h3>
+          <p>GitHub Actions cron 定时检查上游 releases，发现新版本即自动构建、打包、推送。无需人工干预。</p>
+          <span class="feature-tag">cron: 30 */6 * * *</span>
+        </article>
+
+        <article class="feature">
+          <div class="feature-num">02 <span class="slash">/</span> native-build</div>
+          <div class="feature-icon">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+            </svg>
+          </div>
+          <h3>原生 Android 构建</h3>
+          <p>GOOS=android GOARCH=arm64 CGO_ENABLED=0 编译，纯静态 ELF，直接调用 Android linker，无需 glibc 兼容层。</p>
+          <span class="feature-tag">CGO_ENABLED=0</span>
+        </article>
+
+        <article class="feature">
+          <div class="feature-num">03 <span class="slash">/</span> apt-repo</div>
+          <div class="feature-icon">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/>
+            </svg>
+          </div>
+          <h3>完整 apt 源结构</h3>
+          <p>dists/stable/Release + Packages + Packages.gz + deb，符合 Debian Repository Format，pkg update 直接识别。</p>
+          <span class="feature-tag">Debian Policy compliant</span>
+        </article>
+
+        <article class="feature">
+          <div class="feature-num">04 <span class="slash">/</span> orphan-branch</div>
+          <div class="feature-icon">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+            </svg>
+          </div>
+          <h3>Orphan 分支发布</h3>
+          <p>单 commit force-push，分支体积恒等于当前 deb 大小。发布 1000 次仍只占 12MB，不会随版本累积。</p>
+          <span class="feature-tag">git push --force</span>
+        </article>
+
+        <article class="feature">
+          <div class="feature-num">05 <span class="slash">/</span> multi-mirror</div>
+          <div class="feature-icon">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z M3 7l9 6 9-6"/>
+            </svg>
+          </div>
+          <h3>多镜像支持</h3>
+          <p>GitHub Raw / GitHub Pages / Cloudflare Pages / jsDelivr CDN。install.sh 自动测延迟选最快的，可手动指定。</p>
+          <span class="feature-tag">5 mirrors</span>
+        </article>
+
+        <article class="feature">
+          <div class="feature-num">06 <span class="slash">/</span> trusted-source</div>
+          <div class="feature-icon">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+            </svg>
+          </div>
+          <h3>上游可信</h3>
+          <p>源码直接来自 esengine/DeepSeek-Reasonix 官方 release tag，未做任何修改，仅重新编译为 Android 目标。</p>
+          <span class="feature-tag">unmodified source</span>
+        </article>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 安装 ==================== -->
+  <section id="install">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-eyebrow">// install</div>
+        <h2 class="section-title">三步装上</h2>
+        <p class="section-sub">在 Termux 里执行。脚本会询问是否切清华源、测镜像延迟、自动选最快的。直接回车就用推荐项。</p>
+      </div>
+
+      <div class="install-grid">
+
+        <div class="install-step">
+          <div class="install-step-head">
+            <div class="install-step-title">下载脚本</div>
+          </div>
+          <p class="install-step-desc">从仓库 main 分支拉取 install.sh。建议下载到本地编辑后再跑，方便改镜像配置。</p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-label">termux — bash</span>
+              <button class="copy-btn" data-copy="curl -fsSL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh -o install.sh">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <span>复制</span>
+              </button>
+            </div>
+            <pre><code><span class="c-prompt">$</span> curl -fsSL \
+    https://raw.githubusercontent.com/<span class="c-var">masgzy</span>/reasonix-termux/main/scripts/install.sh \
+    -o install.sh</code></pre>
+          </div>
+        </div>
+
+        <div class="install-step">
+          <div class="install-step-head">
+            <div class="install-step-title">改配置（可选）</div>
+          </div>
+          <p class="install-step-desc">默认配置已可用。如果你要加自己的镜像或换仓库，编辑 OWNER_REPO 和 MIRRORS 数组即可。</p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-label">termux — bash</span>
+              <button class="copy-btn" data-copy="nano install.sh">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <span>复制</span>
+              </button>
+            </div>
+            <pre><code><span class="c-prompt">$</span> nano install.sh
+
+<span class="c-comment"># 改这两行:</span>
+<span class="c-var">OWNER_REPO</span>=<span class="c-str">"masgzy/reasonix-termux"</span>
+<span class="c-var">MIRRORS</span>=(
+  <span class="c-str">"GitHub Raw|https://raw.githubusercontent.com/masgzy/reasonix-termux/apt"</span>
+  <span class="c-str">"GitHub Pages|https://rxt.cc.cd"</span>
+  <span class="c-str">"Cloudflare Pages|https://cf.rxt.cc.cd"</span>
+  <span class="c-str">"jsDelivr|https://cdn.jsdelivr.net/gh/masgzy/reasonix-termux@apt"</span>
+)</code></pre>
+          </div>
+        </div>
+
+        <div class="install-step">
+          <div class="install-step-head">
+            <div class="install-step-title">运行</div>
+          </div>
+          <p class="install-step-desc">脚本会问 5 个问题，每步都有提示。直接回车就用推荐项。装完 reasonix 就在 PATH 里了。</p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-label">termux — bash</span>
+              <button class="copy-btn" data-copy="bash install.sh">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <span>复制</span>
+              </button>
+            </div>
+            <pre><code><span class="c-prompt">$</span> bash install.sh
+
+<span class="c-comment">[1/5]</span> <span class="c-info">Termux 官方源</span>   <span class="c-comment">→ Y 切清华源</span>
+<span class="c-comment">[2/5]</span> <span class="c-info">检查 curl</span>       <span class="c-comment">→ 自动安装</span>
+<span class="c-comment">[3/5]</span> <span class="c-info">测试镜像延迟</span>    <span class="c-comment">→ 3 次取平均</span>
+<span class="c-comment">[4/5]</span> <span class="c-info">选择镜像</span>        <span class="c-comment">→ 回车 = 最低延迟</span>
+<span class="c-comment">[5/5]</span> <span class="c-info">写入源 + 安装</span>
+
+<span class="c-ok">[OK]</span> reasonix 已安装到:
+  /data/data/com.termux/files/usr/bin/reasonix
+
+<span class="c-prompt">$</span> reasonix --version</code></pre>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="callout">
+        <p class="callout-title">后续更新</p>
+        <p>装好之后不用再跑安装脚本。本仓库每 6 小时自动同步上游新版本并推到 apt 分支。你只需要定期执行下面的命令：</p>
+        <div class="code-block">
+          <div class="code-block-header">
+            <span class="code-block-label">termux — bash</span>
+            <button class="copy-btn" data-copy="pkg update && pkg upgrade reasonix">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+              </svg>
+              <span>复制</span>
+            </button>
+          </div>
+          <pre><code><span class="c-comment"># 升级所有包（含 reasonix）</span>
+<span class="c-prompt">$</span> pkg update <span class="c-comment">&&</span> pkg upgrade
+
+<span class="c-comment"># 只升级 reasonix</span>
+<span class="c-prompt">$</span> pkg upgrade reasonix
+
+<span class="c-comment"># 看可用版本</span>
+<span class="c-prompt">$</span> apt list --all-versions reasonix</code></pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 镜像 ==================== -->
+  <section id="mirrors">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-eyebrow">// mirrors</div>
+        <h2 class="section-title">镜像列表</h2>
+        <p class="section-sub">所有镜像都同步指向同一个 apt 分支。选延迟最低的就行，install.sh 会自动测。也可以全部加到 sources.list.d/ 实现故障切换。</p>
+      </div>
+
+      <div class="table-wrap">
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>镜像</th>
+                <th>URL 前缀</th>
+                <th>说明</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="t-name">GitHub Raw</td>
+                <td class="t-url">https://raw.githubusercontent.com/masgzy/reasonix-termux/apt</td>
+                <td class="t-desc">默认，最稳定</td>
+              </tr>
+              <tr>
+                <td class="t-name">GitHub /raw/</td>
+                <td class="t-url">https://github.com/masgzy/reasonix-termux/raw/apt</td>
+                <td class="t-desc">同上，走 github.com 域名</td>
+              </tr>
+              <tr>
+                <td class="t-name">GitHub Pages</td>
+                <td class="t-url">https://rxt.cc.cd/</td>
+                <td class="t-desc">需在 Settings → Pages 启用，源 = apt 分支</td>
+              </tr>
+              <tr>
+                <td class="t-name">Cloudflare Pages</td>
+                <td class="t-url">https://cf.rxt.cc.cd/</td>
+                <td class="t-desc">需在 Cloudflare Pages 接入仓库，生产分支 = apt</td>
+              </tr>
+              <tr>
+                <td class="t-name">jsDelivr CDN</td>
+                <td class="t-url">https://cdn.jsdelivr.net/gh/masgzy/reasonix-termux@apt</td>
+                <td class="t-desc">海外更快，国内有时被墙</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <p class="table-footnote">
+        手动使用（不用 install.sh）：把上表任一 URL 前缀写入
+        <code>$PREFIX/etc/apt/sources.list.d/reasonix.list</code>，
+        格式：<code>deb [trusted=yes] &lt;URL&gt; stable main</code>
+      </p>
+    </div>
+  </section>
+
+  <!-- ==================== Footer ==================== -->
+  <footer>
+    <div class="container">
+      <div class="footer-grid">
+        <div>
+          <div class="footer-brand">
+            <span class="brand-mark">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 12l5 5L20 7"/>
+              </svg>
+            </span>
+            <span>reasonix-termux</span>
+          </div>
+          <p class="footer-desc">
+            本仓库非官方，仅作为上游 esengine/DeepSeek-Reasonix 的 Termux 分发渠道。
+            源码、商标、权益归上游所有。如遇 Reasonix 本身的 bug 请到上游提 issue。
+          </p>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/esengine/DeepSeek-Reasonix" target="_blank" rel="noopener">上游仓库 ↗</a>
+          <a href="https://github.com/esengine/DeepSeek-Reasonix/releases" target="_blank" rel="noopener">上游 Releases ↗</a>
+          <a href="https://wiki.termux.com/wiki/Package_Management" target="_blank" rel="noopener">Termux 包管理 ↗</a>
+          <a href="https://catppuccin.com/palette/" target="_blank" rel="noopener">Catppuccin 配色 ↗</a>
+        </div>
+      </div>
+      <div class="footer-meta">
+        <span>built with GOOS=android GOARCH=arm64 CGO_ENABLED=0</span>
+        <span>·</span>
+        <span>JetBrains Mono + IBM Plex Sans</span>
+        <span>·</span>
+        <span>orphan branch publishing</span>
+        <span>·</span>
+        <span>auto-sync every 6h</span>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    // === 移动端菜单切换 ===
+    const menuBtn = document.getElementById('menu-btn');
+    const mobileMenu = document.getElementById('mobile-menu');
+    menuBtn.addEventListener('click', () => {
+      const open = mobileMenu.classList.toggle('open');
+      menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    // 点击菜单项后关闭
+    mobileMenu.querySelectorAll('a').forEach(a => {
+      a.addEventListener('click', () => {
+        mobileMenu.classList.remove('open');
+        menuBtn.setAttribute('aria-expanded', 'false');
+      });
+    });
+
+    // === 代码块复制按钮 ===
+    document.querySelectorAll('.copy-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const text = btn.getAttribute('data-copy');
+        const label = btn.querySelector('span');
+        const originalText = label.textContent;
+        try {
+          await navigator.clipboard.writeText(text);
+          label.textContent = '已复制';
+          btn.classList.add('copied');
+          setTimeout(() => {
+            label.textContent = originalText;
+            btn.classList.remove('copied');
+          }, 1800);
+        } catch (e) {
+          // fallback for non-HTTPS / old browsers
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.select();
+          try { document.execCommand('copy'); label.textContent = '已复制'; btn.classList.add('copied'); }
+          catch (e2) { label.textContent = '复制失败'; }
+          document.body.removeChild(ta);
+          setTimeout(() => {
+            label.textContent = originalText;
+            btn.classList.remove('copied');
+          }, 1800);
+        }
+      });
+    });
+  </script>
+
+</body>
+</html>

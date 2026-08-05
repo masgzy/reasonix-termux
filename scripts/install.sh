@@ -22,19 +22,18 @@
 set -e
 
 # ===== 配置区 (用户自行修改) =====
-OWNER_REPO="masgzy/reasonix-termux"  # ← 替换为你的实际仓库
+OWNER_REPO="masgzy/reasonix-termux"  # 仓库路径
 APT_BRANCH="apt"                       # 发布分支
 APT_DIST="stable"                      # apt distribution
 APT_COMPONENT="main"                   # apt component
 
 # 镜像列表 - 自行增删
 # 格式: "名称|URL前缀"
-# 含 "your-username" / "your-project" / "your-repo" 的占位 URL 会被自动跳过
 MIRRORS=(
   "GitHub Raw|https://raw.githubusercontent.com/${OWNER_REPO}/${APT_BRANCH}"
   "GitHub /raw/ URL|https://github.com/${OWNER_REPO}/raw/${APT_BRANCH}"
-  "GitHub Pages|https://your-username.github.io/your-repo"
-  "Cloudflare Pages|https://your-project.pages.dev"
+  "GitHub Pages|https://rxt.cc.cd"
+  "Cloudflare Pages|https://cf.rxt.cc.cd"
   "jsDelivr CDN|https://cdn.jsdelivr.net/gh/${OWNER_REPO}@${APT_BRANCH}"
 )
 # ===== 配置区结束 =====
@@ -164,11 +163,12 @@ if [ -z "$PREFIX" ] || [ ! -d "/data/data/com.termux" ]; then
   exit 1
 fi
 
-if [ "$OWNER_REPO" = "your-username/your-repo" ]; then
-  log_error "请先编辑脚本, 把 OWNER_REPO 改为实际仓库"
+# 检查 OWNER_REPO 是否还是默认值 (防止用户 fork 后忘了改)
+if [ "$OWNER_REPO" = "your-username/your-repo" ] || [ -z "$OWNER_REPO" ]; then
+  log_error "OWNER_REPO 未配置. 请下载脚本后编辑顶部的 OWNER_REPO 变量"
   echo ""
   log_dim "下载并编辑后再运行:"
-  echo "  curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.sh -o install-reasonix.sh"
+  echo "  curl -fsSL https://raw.githubusercontent.com/${OWNER_REPO}/main/scripts/install.sh -o install-reasonix.sh"
   echo "  nano install-reasonix.sh"
   echo "  bash install-reasonix.sh"
   exit 1
@@ -231,8 +231,9 @@ table_rows=()
 for i in "${!MIRRORS[@]}"; do
   IFS='|' read -r name url <<< "${MIRRORS[$i]}"
 
-  # 跳过占位 URL
-  if [[ "$url" == *"your-username"* ]] || \
+  # 跳过空 URL 或明显未配置的占位 URL (含 your- 前缀)
+  if [ -z "$url" ] || \
+     [[ "$url" == *"your-username"* ]] || \
      [[ "$url" == *"your-project"* ]] || \
      [[ "$url" == *"your-repo"* ]]; then
     LATENCIES[$i]=-2

@@ -223,6 +223,8 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: 初始化 fresh orphan apt 分支 (始终单 commit)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           # 永远创建 fresh orphan 分支 - 历史永远只有 1 个 commit
@@ -231,7 +233,9 @@ jobs:
           mkdir -p apt-branch
           cd apt-branch
           git init -b ${{ env.APT_BRANCH }}
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          # 关键: 必须把 GITHUB_TOKEN 嵌入 remote URL, 否则 push 时
+          # git 会要求交互输入用户名密码, CI 无 TTY 导致 "could not read Username"
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
 
       - name: 用新构建产物替换 apt 分支内容
         run: |
@@ -308,6 +312,9 @@ jobs:
           ref: ${{ github.ref_name }}
           path: main-branch
           fetch-depth: 1
+          # persist-credentials 默认 true, 会把 GITHUB_TOKEN 写进 .git/config
+          # 这样后面 git push 不需要再嵌入 token
+          persist-credentials: true
 
       - name: 在 main 分支提交 version.txt
         run: |
@@ -321,6 +328,7 @@ jobs:
             echo "version.txt 未变化"
           else
             git commit -m "chore: 已发布版本更新为 ${UPSTREAM_TAG}"
+            # actions/checkout 已配置 token, 直接 push 即可
             git push
           fi
 

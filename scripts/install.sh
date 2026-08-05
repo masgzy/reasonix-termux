@@ -214,8 +214,7 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 echo -e "${C_TITLE}[3/5] 测试镜像延迟${C_RESET}"
-log_dim "  正在测试每个镜像的 $(log_path "dists/${APT_DIST}/Release") 文件..."
-echo ""
+log_dim "  正在测试每个镜像的 $(log_path "dists/${APT_DIST}/Release") 文件 (每个测 3 次取平均)..."
 
 RELEASE_PATH="dists/${APT_DIST}/Release"
 
@@ -228,8 +227,33 @@ valid_count=0
 # 先收集结果, 然后用 print_table 输出
 table_rows=()
 
+# 进度条: 总数 = 镜像数, 每测完一个就更新
+total_mirrors=${#MIRRORS[@]}
+done_count=0
+
+# 进度条宽度 (字符)
+BAR_WIDTH=24
+
+update_progress() {
+  local done=$1
+  local total=$2
+  local current_name="$3"
+  local pct=$(( done * 100 / total ))
+  local filled=$(( done * BAR_WIDTH / total ))
+  local empty=$(( BAR_WIDTH - filled ))
+  local bar=""
+  for ((k=0; k<filled; k++)); do bar+="█"; done
+  for ((k=0; k<empty; k++)); do bar+="░"; done
+  # \r 回到行首, 不换行
+  printf "\r  ${C_INFO}${bar}${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
+    "$pct" "$done" "$total" "${current_name:0:20}"
+}
+
+update_progress 0 "$total_mirrors" "开始..."
+
 for i in "${!MIRRORS[@]}"; do
   IFS='|' read -r name url <<< "${MIRRORS[$i]}"
+  update_progress "$done_count" "$total_mirrors" "$name"
 
   # 跳过空 URL 或明显未配置的占位 URL (含 your- 前缀)
   if [ -z "$url" ] || \
@@ -238,6 +262,7 @@ for i in "${!MIRRORS[@]}"; do
      [[ "$url" == *"your-repo"* ]]; then
     LATENCIES[$i]=-2
     table_rows+=("$(log_keyword "$((i+1))")|$name|$(log_dim "(跳过)")")
+    done_count=$((done_count + 1))
     continue
   fi
 
@@ -269,10 +294,28 @@ for i in "${!MIRRORS[@]}"; do
     LATENCIES[$i]=-1
     table_rows+=("$(log_keyword "$((i+1))")|$name|不可达")
   fi
+  done_count=$((done_count + 1))
 done
+
+# 进度条 100% 后清行
+update_progress "$total_mirrors" "$total_mirrors" "完成"
+echo ""
+echo ""
 
 # 输出表格
 print_table "序号|镜像名称|延迟" "${table_rows[@]}"
+
+# 国内环境警告: GitHub Raw 延迟通常很高 (>500ms) 或不可达
+if [ $best_idx -ge 0 ]; then
+  IFS='|' read -r best_name best_url <<< "${MIRRORS[$best_idx]}"
+  # 如果最低延迟的镜像延迟 > 500ms 且包含 githubusercontent, 提示国内网络
+  if [ "$best_latency" -gt 500 ] && [[ "$best_url" == *"githubusercontent"* ]]; then
+    echo ""
+    log_warn "国内网络访问 GitHub Raw 延迟较高 (${best_latency}ms)"
+    echo "  $(log_dim '建议:') 切换到 Cloudflare Pages / jsDelivr / GitHub Pages 镜像"
+    echo "  $(log_dim '或:')   先切清华源 (Step 1 选 Y) 后再跑此脚本"
+  fi
+fi
 
 if [ $valid_count -eq 0 ]; then
   echo ""

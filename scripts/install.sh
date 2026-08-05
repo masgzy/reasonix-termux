@@ -22,7 +22,7 @@
 set -e
 
 # ===== 配置区 (用户自行修改) =====
-OWNER_REPO="your-username/your-repo"  # ← 替换为你的实际仓库
+OWNER_REPO="masgzy/reasonix-termux"  # ← 替换为你的实际仓库
 APT_BRANCH="apt"                       # 发布分支
 APT_DIST="stable"                      # apt distribution
 APT_COMPONENT="main"                   # apt component

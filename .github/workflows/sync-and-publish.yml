@@ -264,6 +264,10 @@ jobs:
             echo "::warning::未找到 site/index.html, 跳过主页部署"
           fi
 
+          # .nojekyll: 告诉 GitHub Pages 跳过 Jekyll 处理
+          # 避免 Jekyll 忽略下划线开头的文件/目录, 也加快 Pages 部署
+          touch .nojekyll
+
           # 写一个 README 给访问者
           cat > README.md <<'README_EOF'
           # Reasonix Termux APT 源 (自动发布)

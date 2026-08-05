@@ -16,6 +16,16 @@ PREFIX="${3:?missing termux_prefix}"    # /data/data/com.termux/files/usr
 BIN_PATH="${4:?missing binary_path}"
 OUT_DIR="${5:?missing output_dir}"
 
+# 把 OUT_DIR 和 BIN_PATH 转成绝对路径
+# 防止后续 cd "$WORK_DIR" 后相对路径失效 (曾导致 ar: build//xxx.deb: No such file)
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+if [ ! -f "$BIN_PATH" ]; then
+  # BIN_PATH 可能是相对路径, 尝试基于调用者 cwd 解析
+  if [ -f "$(pwd)/$BIN_PATH" ]; then
+    BIN_PATH="$(pwd)/$BIN_PATH"
+  fi
+fi
+
 VER="${TAG#v}"
 PKG_NAME="reasonix"
 FULL_VER="${VER}"

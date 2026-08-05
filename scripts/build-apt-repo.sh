@@ -20,6 +20,10 @@ COMPONENT="${3:?missing component}" # main
 ARCH="${4:?missing arch}"           # aarch64
 OUT_DIR="${5:?missing out_dir}"
 
+# 转成绝对路径, 防止后续 cd 子shell 后相对路径失效
+DEB_DIR="$(cd "$DEB_DIR" && pwd)"
+OUT_DIR="$(mkdir -p "$OUT_DIR" && cd "$OUT_DIR" && pwd)"
+
 PKG_DIR="$OUT_DIR/dists/$DIST/$COMPONENT/binary-$ARCH"
 mkdir -p "$PKG_DIR"
 

@@ -74,14 +74,19 @@ jobs:
       - name: 查询上游最新 CLI tag
         id: upstream
         run: |
-          # GitHub API 取上游最新 non-prerelease CLI release (v* tag, 排除 desktop-v*)
+          # GitHub API 列出最近 20 个 release (含 CLI 和 Desktop, 按时间倒序)
+          # 过滤掉:
+          #   - prerelease (预发布)
+          #   - desktop-* 开头的 tag (Desktop 版, 我们只跟 CLI)
+          #   - npm-* 开头的 tag (npm 包, 同上)
+          # 取第一个匹配的 (即最新的 CLI stable release)
           UPSTREAM=$(curl -fsSL \
             -H "Accept: application/vnd.github+json" \
             -H "User-Agent: termux-sync-bot" \
-            "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" \
-            | jq -r '.tag_name')
+            "https://api.github.com/repos/${UPSTREAM_REPO}/releases?per_page=20" \
+            | jq -r '[.[] | select(.prerelease == false and (.tag_name | test("^(desktop|npm)-") | not))][0].tag_name')
           if [ -z "$UPSTREAM" ] || [ "$UPSTREAM" = "null" ]; then
-            echo "::error::无法获取上游最新 tag"
+            echo "::error::无法获取上游最新 CLI tag"
             exit 1
           fi
           echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"

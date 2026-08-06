@@ -149,43 +149,55 @@ jobs:
           # 参考: golang/go#57393
           #
           # 用 termux/termux-docker 镜像, 在 ubuntu runner 上跑 Termux 环境
+          # 注意: termux-docker 的 entrypoint 是 /entrypoint.sh, 默认 CMD=login
+          #       要跑命令用: docker run ... termux/termux-docker bash -c '...'
+          #       (不用 --entrypoint, 让默认 entrypoint 用 su 切到 system 用户执行)
+
+          # 把构建脚本写成文件, 挂载进去执行 (避免 docker run -c 里的引号嵌套问题)
+          cat > /tmp/build-in-termux.sh <<'BUILD_SCRIPT'
+          set -euo pipefail
+          cd /home/builder/work
+
+          # 装 Go (Termux 的 Go 是 GOHOSTOS=android)
+          pkg install -y golang git
+
+          # 读 go.mod 要求的 Go 版本
+          REQUIRED_GO=$(head -1 go.mod | grep -oE "go [0-9]+\.[0-9]+" | cut -d' ' -f2 || echo "1.26")
+          INSTALLED_GO=$(go version | grep -oE "go[0-9]+\.[0-9]+\.[0-9]+" | sed 's/go//')
+          echo "Required Go: $REQUIRED_GO, Installed: $INSTALLED_GO"
+
+          TAG="${TAG}"
+          COMMIT=$(git rev-parse --short HEAD)
+
+          mkdir -p /home/builder/out
+
+          echo "=== go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0) ==="
+          CGO_ENABLED=0 \
+          GOOS=android \
+          GOARCH=arm64 \
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
+            -o /home/builder/out/reasonix \
+            ./cmd/reasonix
+
+          echo "=== build info ==="
+          go version -m /home/builder/out/reasonix | head -5
+          file /home/builder/out/reasonix
+          ls -lh /home/builder/out/reasonix
+          BUILD_SCRIPT
+
+          # 去掉每行开头的缩进 (因为 heredoc 在 yaml run 块里被缩进了)
+          sed -i 's/^          //' /tmp/build-in-termux.sh
+
+          mkdir -p build
           docker run --rm \
             -v "$PWD/upstream:/home/builder/work" \
             -v "$PWD/build:/home/builder/out" \
+            -v "/tmp/build-in-termux.sh:/home/builder/build.sh:ro" \
             -e TAG="${TAG}" \
-            --entrypoint /bin/bash \
             termux/termux-docker:latest \
-            -c '
-              set -euo pipefail
-              cd /home/builder/work
-
-              # 装 Go (Termux 的 Go 是 GOHOSTOS=android)
-              pkg install -y golang git
-
-              # 读 go.mod 要求的 Go 版本, 确认安装的版本兼容
-              REQUIRED_GO=$(head -1 go.mod | grep -oP "go \K[0-9]+\.[0-9]+" || echo "1.26")
-              INSTALLED_GO=$(go version | grep -oP "go\K[0-9]+\.[0-9]+\.[0-9]+")
-              echo "Required Go: $REQUIRED_GO, Installed: $INSTALLED_GO"
-
-              COMMIT=$(git rev-parse --short HEAD)
-
-              mkdir -p /home/builder/out
-
-              echo "=== go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0) ==="
-              CGO_ENABLED=0 \
-              GOOS=android \
-              GOARCH=arm64 \
-              go build \
-                -trimpath \
-                -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
-                -o /home/builder/out/reasonix \
-                ./cmd/reasonix
-
-              echo "=== build info ==="
-              go version -m /home/builder/out/reasonix | head -5
-              file /home/builder/out/reasonix
-              ls -lh /home/builder/out/reasonix
-            '
+            bash /home/builder/build.sh
 
           echo "=== 本地验证 ==="
           file build/reasonix

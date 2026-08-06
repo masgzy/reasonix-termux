@@ -147,28 +147,26 @@ jobs:
           COMMIT=$(git -C . rev-parse --short HEAD)
 
           mkdir -p ../build
+          LDFLAGS="-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}"
+
+          # 关键: 必须用 GOOS=android 而不是 GOOS=linux
+          # 原因: atotto/clipboard 在 init() 阶段调 os/exec.LookPath → Eaccess
+          #   - GOOS=linux:  Eaccess → faccessat2 syscall (Linux 5.8+)
+          #                  Android seccomp 拒绝 faccessat2 → SIGSYS: bad system call
+          #   - GOOS=android: Eaccess 直接返回 ENOSYS, 调用方降级到 permission bits 检查
+          #                  不调 faccessat2, 不触发 seccomp
+          # 这个特判在 Go 1.26+ 的 src/internal/syscall/unix/eaccess.go 里
+          # 参考: https://github.com/golang/go/blob/release-branch.go1.26/src/internal/syscall/unix/eaccess.go
+          # 实测: 跑 GOOS=linux 编的二进制在 Android 16 / 内核 6.1 上同样崩 (seccomp 拒绝)
           echo "::group::go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0)"
-          # 用户要求: GOOS=android GOARCH=arm64
-          # CGO_ENABLED=0 -> 纯静态 ELF, Termux (bionic libc) 可直接运行
-          # 若未来 Go 拒绝 GOOS=android + CGO_ENABLED=0, 自动回退 GOOS=linux
-          if ! (CGO_ENABLED=0 \
-                GOOS=${{ env.GOOS_TARGET }} \
-                GOARCH=${{ env.GOARCH_TARGET }} \
-                go build \
-                  -trimpath \
-                  -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
-                  -o ../build/reasonix \
-                  ./cmd/reasonix); then
-            echo "::warning::GOOS=android 构建失败, 回退到 GOOS=linux (Termux 仍可运行)"
-            CGO_ENABLED=0 \
-            GOOS=linux \
-            GOARCH=${{ env.GOARCH_TARGET }} \
-            go build \
-              -trimpath \
-              -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
-              -o ../build/reasonix \
-              ./cmd/reasonix
-          fi
+          CGO_ENABLED=0 \
+          GOOS=android \
+          GOARCH=${{ env.GOARCH_TARGET }} \
+          go build \
+            -trimpath \
+            -ldflags "${LDFLAGS}" \
+            -o ../build/reasonix \
+            ./cmd/reasonix
           echo "::endgroup::"
 
           file ../build/reasonix

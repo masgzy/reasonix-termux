@@ -31,7 +31,7 @@ APT_COMPONENT="main"                   # apt component
 # 格式: "名称|URL前缀"
 MIRRORS=(
   "GitHub Raw|https://raw.githubusercontent.com/${OWNER_REPO}/${APT_BRANCH}"
-  "GitHub /raw/ URL|https://github.com/${OWNER_REPO}/raw/${APT_BRANCH}"
+  "GitHub Raw (美国代理)|https://github.cnxiaobai.com/https://raw.githubusercontent.com/${OWNER_REPO}/${APT_BRANCH}"
   "GitHub Pages|https://rxt.cc.cd"
   "Cloudflare Pages|https://cf.rxt.cc.cd"
   "jsDelivr CDN|https://cdn.jsdelivr.net/gh/${OWNER_REPO}@${APT_BRANCH}"
@@ -89,45 +89,52 @@ log_keyword() { echo -e "${C_KEYWORD}$*${C_RESET}"; }
 
 # 简易表格打印 (printf 对齐, 不用复杂边框)
 # 用法: print_table "标题1|标题2" "行1列1|行1列2" "行2列1|行2列2" ...
+# 去除 ANSI 转义码, 返回纯文本 (用于计算可见宽度)
+strip_ansi() {
+  # 用 sed 去掉 ESC[...m 序列 (033 = ESC)
+  printf '%s' "$1" | sed $'s/\033\\[[0-9;]*m//g'
+}
+
 print_table() {
   local header="$1"
   shift
 
-  # 计算每列最大宽度
+  # 计算每列最大宽度 (基于可见字符, 去掉 ANSI 转义码)
   declare -a col_widths
-  # 先看表头
   IFS='|' read -ra headers <<< "$header"
   for i in "${!headers[@]}"; do
-    col_widths[$i]=${#headers[$i]}
+    col_widths[$i]=$(strip_ansi "${headers[$i]}" | wc -m)
   done
-  # 再看每行
   local rows=("$@")
   for row in "${rows[@]}"; do
     IFS='|' read -ra cells <<< "$row"
     for i in "${!cells[@]}"; do
-      if [ ${#cells[$i]} -gt ${col_widths[$i]:-0} ]; then
-        col_widths[$i]=${#cells[$i]}
+      local cw=$(strip_ansi "${cells[$i]}" | wc -m)
+      if [ "$cw" -gt "${col_widths[$i]:-0}" ]; then
+        col_widths[$i]=$cw
       fi
     done
   done
 
-  # 打印表头 (紫色加粗)
+  # 打印表头 (紫色加粗) - 用 printf %b 解释转义码
   local header_line=""
   for i in "${!headers[@]}"; do
     local w=${col_widths[$i]}
-    header_line+=$(printf "${C_TITLE}%-${w}s${C_RESET}" "${headers[$i]}")
+    local cell_visible=$(strip_ansi "${headers[$i]}" | wc -m)
+    local pad=$(( w - cell_visible ))
+    header_line+="${C_TITLE}${headers[$i]}$(printf '%*s' "$pad" '')${C_RESET}"
     [ $i -lt $((${#headers[@]} - 1)) ] && header_line+="  "
   done
-  echo "  $header_line"
+  printf '  %b\n' "$header_line"
 
-  # 分隔线
+  # 分隔线 (暗淡)
   local sep=""
   for i in "${!headers[@]}"; do
     local w=${col_widths[$i]}
-    sep+=$(printf "%-${w}s" "" | tr ' ' '-')
+    sep+=$(printf '%-*s' "$w" '' | tr ' ' '-')
     [ $i -lt $((${#headers[@]} - 1)) ] && sep+="  "
   done
-  echo "  ${C_DIM}${sep}${C_RESET}"
+  printf '  %b%b%b\n' "$C_DIM" "$sep" "$C_RESET"
 
   # 打印数据行
   for row in "${rows[@]}"; do
@@ -136,17 +143,13 @@ print_table() {
     for i in "${!cells[@]}"; do
       local w=${col_widths[$i]}
       local cell="${cells[$i]}"
-      # 数字开头(含 ms / KB / MB / 不可达)用黄色
-      if [[ "$cell" =~ ^[0-9]+ ]] || [[ "$cell" == "不可达" ]]; then
-        line+=$(printf "${C_NUMBER}%-${w}s${C_RESET}" "$cell")
-      elif [[ "$cell" == "占位" || "$cell" == "(跳过)" ]]; then
-        line+=$(printf "${C_DIM}%-${w}s${C_RESET}" "$cell")
-      else
-        line+=$(printf "%-${w}s" "$cell")
-      fi
+      local cell_visible=$(strip_ansi "$cell" | wc -m)
+      local pad=$(( w - cell_visible ))
+      # cell 已经带颜色 (由调用方 log_xxx 函数加的), 直接用 + 右侧补空格
+      line+="${cell}$(printf '%*s' "$pad" '')"
       [ $i -lt $((${#cells[@]} - 1)) ] && line+="  "
     done
-    echo "  $line"
+    printf '  %b\n' "$line"
   done
 }
 
@@ -210,11 +213,11 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 3: 测试镜像延迟
+# Step 3: 测试镜像延迟 (并发 curl)
 # ---------------------------------------------------------------------------
 echo ""
 echo -e "${C_TITLE}[3/5] 测试镜像延迟${C_RESET}"
-log_dim "  正在测试每个镜像的 $(log_path "dists/${APT_DIST}/Release") 文件 (每个测 3 次取平均)..."
+log_dim "  并发 curl 拉取 $(log_path "dists/${APT_DIST}/Release") (每个测 3 次取平均)..."
 
 RELEASE_PATH="dists/${APT_DIST}/Release"
 
@@ -224,54 +227,32 @@ best_idx=-1
 best_latency=999999
 valid_count=0
 
-# 先收集结果, 然后用 print_table 输出
-table_rows=()
+# 临时目录存放每个镜像的测速结果
+TMPDIR_TEST=$(mktemp -d)
+trap 'rm -rf "$TMPDIR_TEST"' EXIT
 
-# 进度条: 总数 = 镜像数, 每测完一个就更新
-total_mirrors=${#MIRRORS[@]}
-done_count=0
+# 单个镜像测速函数 (后台运行, 结果写入文件)
+# 参数: <索引> <url>
+test_one_mirror() {
+  local idx="$1"
+  local url="$2"
+  local result_file="$TMPDIR_TEST/result_$idx"
 
-# 进度条宽度 (字符)
-BAR_WIDTH=24
-
-update_progress() {
-  local done=$1
-  local total=$2
-  local current_name="$3"
-  local pct=$(( done * 100 / total ))
-  local filled=$(( done * BAR_WIDTH / total ))
-  local empty=$(( BAR_WIDTH - filled ))
-  local bar=""
-  for ((k=0; k<filled; k++)); do bar+="█"; done
-  for ((k=0; k<empty; k++)); do bar+="░"; done
-  # \r 回到行首, 不换行
-  printf "\r  ${C_INFO}${bar}${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
-    "$pct" "$done" "$total" "${current_name:0:20}"
-}
-
-update_progress 0 "$total_mirrors" "开始..."
-
-for i in "${!MIRRORS[@]}"; do
-  IFS='|' read -r name url <<< "${MIRRORS[$i]}"
-  update_progress "$done_count" "$total_mirrors" "$name"
-
-  # 跳过空 URL 或明显未配置的占位 URL (含 your- 前缀)
+  # 跳过空 URL 或占位 URL
   if [ -z "$url" ] || \
      [[ "$url" == *"your-username"* ]] || \
      [[ "$url" == *"your-project"* ]] || \
      [[ "$url" == *"your-repo"* ]]; then
-    LATENCIES[$i]=-2
-    table_rows+=("$(log_keyword "$((i+1))")|$name|$(log_dim "(跳过)")")
-    done_count=$((done_count + 1))
-    continue
+    echo "-2" > "$result_file"
+    return
   fi
 
-  full_url="${url}/${RELEASE_PATH}"
+  local full_url="${url}/${RELEASE_PATH}"
+  local total_ms=0
+  local success=0
 
-  # 测试 3 次取平均
-  total_ms=0
-  success=0
   for try in 1 2 3; do
+    local start end ms
     start=$(date +%s%N)
     if curl -sf -o /dev/null --max-time 5 "$full_url" 2>/dev/null; then
       end=$(date +%s%N)
@@ -282,39 +263,103 @@ for i in "${!MIRRORS[@]}"; do
   done
 
   if [ $success -gt 0 ]; then
-    avg_ms=$((total_ms / success))
-    LATENCIES[$i]=$avg_ms
-    valid_count=$((valid_count + 1))
-    table_rows+=("$(log_keyword "$((i+1))")|$name|${avg_ms}ms")
-    if [ $avg_ms -lt $best_latency ]; then
-      best_latency=$avg_ms
-      best_idx=$i
-    fi
+    echo "$((total_ms / success))" > "$result_file"
   else
-    LATENCIES[$i]=-1
-    table_rows+=("$(log_keyword "$((i+1))")|$name|不可达")
+    echo "-1" > "$result_file"
   fi
-  done_count=$((done_count + 1))
+}
+
+# 启动所有镜像的测速 (并发)
+log_dim "  启动 $(${#MIRRORS[@]}) 个并发测速任务..."
+for i in "${!MIRRORS[@]}"; do
+  IFS='|' read -r _ url <<< "${MIRRORS[$i]}"
+  test_one_mirror "$i" "$url" &
 done
 
-# 进度条 100% 后清行
-update_progress "$total_mirrors" "$total_mirrors" "完成"
+# 进度条: 等待所有任务完成, 实时显示已完成数
+BAR_WIDTH=24
+total_mirrors=${#MIRRORS[@]}
+while true; do
+  done_count=$(ls "$TMPDIR_TEST"/result_* 2>/dev/null | wc -l)
+  pct=$(( done_count * 100 / total_mirrors ))
+  filled=$(( done_count * BAR_WIDTH / total_mirrors ))
+  empty=$(( BAR_WIDTH - filled ))
+  bar=""
+  for ((k=0; k<filled; k++)); do bar+="█"; done
+  for ((k=0; k<empty; k++)); do bar+="░"; done
+  printf "\r  ${C_INFO}${bar}${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
+    "$pct" "$done_count" "$total_mirrors" "测速中..."
+  [ "$done_count" -ge "$total_mirrors" ] && break
+  sleep 0.2
+done
+printf "\r  ${C_INFO}%s${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
+  "$(printf '%*s' "$BAR_WIDTH" '' | tr ' ' '█')" "100" "$total_mirrors" "$total_mirrors" "完成"
 echo ""
 echo ""
+
+# 等所有后台任务结束
+wait
+
+# 收集结果
+table_rows=()
+for i in "${!MIRRORS[@]}"; do
+  IFS='|' read -r name url <<< "${MIRRORS[$i]}"
+  result_file="$TMPDIR_TEST/result_$i"
+  if [ ! -f "$result_file" ]; then
+    lat="-1"
+  else
+    lat=$(cat "$result_file")
+  fi
+  LATENCIES[$i]=$lat
+
+  if [ "$lat" = "-2" ]; then
+    table_rows+=("$(log_keyword "$((i+1))")|$name|$(log_dim "(跳过)")")
+  elif [ "$lat" = "-1" ]; then
+    table_rows+=("$(log_keyword "$((i+1))")|$name|不可达")
+  else
+    table_rows+=("$(log_keyword "$((i+1))")|$name|${lat}ms")
+    valid_count=$((valid_count + 1))
+    if [ "$lat" -lt "$best_latency" ]; then
+      best_latency=$lat
+      best_idx=$i
+    fi
+  fi
+done
 
 # 输出表格
 print_table "序号|镜像名称|延迟" "${table_rows[@]}"
 
-# 国内环境警告: GitHub Raw 延迟通常很高 (>500ms) 或不可达
-if [ $best_idx -ge 0 ]; then
-  IFS='|' read -r best_name best_url <<< "${MIRRORS[$best_idx]}"
-  # 如果最低延迟的镜像延迟 > 500ms 且包含 githubusercontent, 提示国内网络
-  if [ "$best_latency" -gt 500 ] && [[ "$best_url" == *"githubusercontent"* ]]; then
-    echo ""
-    log_warn "国内网络访问 GitHub Raw 延迟较高 (${best_latency}ms)"
-    echo "  $(log_dim '建议:') 切换到 Cloudflare Pages / jsDelivr / GitHub Pages 镜像"
-    echo "  $(log_dim '或:')   先切清华源 (Step 1 选 Y) 后再跑此脚本"
+# 国内环境警告: GitHub 镜像 (raw.githubusercontent.com) 在国内通常延迟高
+# 检查直连 GitHub 的镜像 (不含代理前缀), 只要有任意一个 > 500ms 或不可达, 就提示用 Pages/CDN/代理
+warn_github=false
+for i in "${!MIRRORS[@]}"; do
+  lat="${LATENCIES[$i]:-0}"
+  [ "$lat" = "-2" ] && continue  # 跳过被跳过的镜像
+  IFS='|' read -r name url <<< "${MIRRORS[$i]}"
+  # 跳过已经是代理/CDN 的镜像 (cnxiaobai/jsdelivr/pages.dev)
+  [[ "$url" == *"cnxiaobai"* ]] && continue
+  [[ "$url" == *"jsdelivr"* ]] && continue
+  [[ "$url" == *"pages.dev"* ]] && continue
+  [[ "$url" == *"rxt.cc.cd"* ]] && continue
+  [[ "$url" == *"cf.rxt"* ]] && continue
+  # 只匹配直连 GitHub 的镜像
+  if [[ "$url" == *"githubusercontent.com"* ]]; then
+    if [ "$lat" = "-1" ] || [ "$lat" -gt 500 ]; then
+      warn_github=true
+      gh_name="$name"
+      gh_lat_str=$([ "$lat" = "-1" ] && echo "不可达" || echo "${lat}ms")
+      break
+    fi
   fi
+done
+
+if [ "$warn_github" = "true" ]; then
+  echo ""
+  log_warn "直连 GitHub ($gh_name) 延迟较高 ($gh_lat_str)"
+  echo "  $(log_dim '国内网络访问 raw.githubusercontent.com 经常被限速, 建议:')"
+  echo "  $(log_dim '  ·') 选 $(log_path 'GitHub Raw (美国代理)') (github.cnxiaobai.com 转发)"
+  echo "  $(log_dim '  ·') 或选 $(log_path 'GitHub Pages') (rxt.cc.cd) / $(log_path 'Cloudflare Pages') (cf.rxt.cc.cd)"
+  echo "  $(log_dim '  ·') 或选 $(log_path 'jsDelivr CDN') (国内有时也被墙)"
 fi
 
 if [ $valid_count -eq 0 ]; then
@@ -338,6 +383,9 @@ if [ $best_idx -ge 0 ]; then
 fi
 read -p "  请输入序号 (1-${#MIRRORS[@]}), 或直接回车使用推荐: " choice
 
+# 清理输入: 去除前后空格、回车、不可见字符
+choice=$(printf '%s' "$choice" | tr -d '[:space:]')
+
 if [ -z "$choice" ]; then
   if [ $best_idx -lt 0 ]; then
     log_error "没有可用的镜像, 退出"
@@ -346,21 +394,22 @@ if [ -z "$choice" ]; then
   selected=$best_idx
   log_ok "已选择: $(log_path "${MIRRORS[$selected]%%|*}")"
 else
-  # 验证输入
+  # 验证输入: 必须是纯数字
   if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
-    log_error "无效输入, 退出"
+    log_error "无效输入 ('$choice'), 请输入数字, 退出"
     exit 1
   fi
   selected=$((choice - 1))
   if [ $selected -lt 0 ] || [ $selected -ge ${#MIRRORS[@]} ]; then
-    log_error "序号超出范围, 退出"
+    log_error "序号 $choice 超出范围 (1-${#MIRRORS[@]}), 退出"
     exit 1
   fi
-  if [ "${LATENCIES[$selected]:-0}" = "-1" ]; then
-    log_error "该镜像不可达, 退出"
+  lat_val="${LATENCIES[$selected]:-0}"
+  if [ "$lat_val" = "-1" ]; then
+    log_error "该镜像 ($(log_path "${MIRRORS[$selected]%%|*}")) 不可达, 退出"
     exit 1
-  elif [ "${LATENCIES[$selected]:-0}" = "-2" ]; then
-    log_error "该镜像是占位 URL, 请先在脚本中配置"
+  elif [ "$lat_val" = "-2" ]; then
+    log_error "该镜像是占位 URL ($(log_path "${MIRRORS[$selected]%%|*}")), 请先在脚本中配置"
     exit 1
   fi
   log_ok "已选择: $(log_path "${MIRRORS[$selected]%%|*}")"

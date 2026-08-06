@@ -118,7 +118,11 @@ jobs:
     name: 构建二进制 + deb + apt 源
     needs: detect
     if: needs.detect.outputs.should_publish == 'true'
-    runs-on: ubuntu-latest
+    # 关键: 必须用 ARM64 runner
+    # 原因: termux-docker 在 x86_64 上跑时, Go 的 GOHOSTOS=linux, 编出来 runtime.GOOS="linux"
+    #       在 arm64 上跑时, termux-docker 的 Go 是 GOHOSTOS=android, runtime.GOOS="android"
+    #       只有 runtime.GOOS="android" 时 eaccess.go 的特判才生效, 不调 faccessat2, 不崩
+    runs-on: ubuntu-24.04-arm
     env:
       UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
     steps:
@@ -196,11 +200,11 @@ jobs:
           echo "=== sources.list ==="
           cat \$PREFIX/etc/apt/sources.list
 
-          # 先 pkg update (跳过测速, 直接用上面配的官方源)
-          pkg update -o
+          # 先 apt update (用 apt 而非 pkg, pkg 会自动测速选镜像)
+          apt update -o
 
           # 装 Go + git + file (Termux 的 Go 是 GOHOSTOS=android)
-          pkg install -y golang git file
+          apt install -y golang git file
 
           # 修复 git dubious ownership (容器内 system 用户不信任宿主机挂载的目录)
           # 必须在 pkg install git 之后跑
@@ -233,17 +237,28 @@ jobs:
           echo "=== 测试 ./reasonix -v ==="
           chmod +x /home/builder/out/reasonix
           TEST_OUTPUT=\$(/home/builder/out/reasonix -v 2>&1 || true)
-          echo "\$TEST_OUTPUT" | head -5
-          echo "(exit code: \$?)"
+          echo "原始输出:"
+          echo "\$TEST_OUTPUT" | head -10
 
-          echo "=== SIGSYS 检查 ==="
+          echo "=== 结果检查 ==="
+          # 1. Exec format error = 容器架构和二进制架构不匹配
+          if echo "\$TEST_OUTPUT" | grep -qi "cannot execute\|Exec format"; then
+            echo "::error::二进制无法执行 (Exec format error) - 容器架构不匹配"
+            exit 1
+          fi
+          # 2. SIGSYS = faccessat2 被 seccomp 拒绝
           if echo "\$TEST_OUTPUT" | grep -qi "SIGSYS\|bad system call"; then
-            echo "::error::二进制仍然 SIGSYS 崩溃"
+            echo "::error::二进制 SIGSYS 崩溃 (faccessat2 被 seccomp 拒绝)"
             echo "\$TEST_OUTPUT" | tail -10
             exit 1
-          else
-            echo "✓ 未检测到 SIGSYS, 二进制可正常运行"
           fi
+          # 3. 空输出 = 可能静默崩溃
+          if [ -z "\$TEST_OUTPUT" ]; then
+            echo "::error::二进制无输出, 可能静默崩溃"
+            exit 1
+          fi
+          echo "✓ 二进制可正常运行"
+          echo "输出前 3 行: \$(echo "\$TEST_OUTPUT" | head -3)"
           BUILD_SCRIPT
 
           # 去掉每行开头的缩进

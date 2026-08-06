@@ -791,6 +791,7 @@
         <a href="#features">特性</a>
         <a href="#install">安装</a>
         <a href="#mirrors">镜像</a>
+        <a href="#notes">注意事项</a>
         <a href="https://github.com/esengine/DeepSeek-Reasonix" target="_blank" rel="noopener">上游 ↗</a>
       </div>
       <div class="nav-actions">
@@ -807,6 +808,7 @@
     <a href="#features">特性</a>
     <a href="#install">安装</a>
     <a href="#mirrors">镜像</a>
+    <a href="#notes">注意事项</a>
     <a href="https://github.com/esengine/DeepSeek-Reasonix" target="_blank" rel="noopener">上游 ↗</a>
     <a href="#install" class="btn btn-accent">一键安装</a>
   </div>
@@ -1124,6 +1126,49 @@
         <code>$PREFIX/etc/apt/sources.list.d/reasonix.list</code>，
         格式：<code>deb [trusted=yes] &lt;URL&gt; stable main</code>
       </p>
+    </div>
+  </section>
+
+  <!-- ==================== 注意事项 ==================== -->
+  <section id="notes">
+    <div class="container">
+      <div class="section-head">
+        <div class="section-eyebrow">// notes</div>
+        <h2 class="section-title">注意事项</h2>
+        <p class="section-sub">Termux 环境的特殊性，安装前了解一下。</p>
+      </div>
+
+      <div class="install-grid">
+        <div class="install-step">
+          <div class="install-step-head">
+            <div class="install-step-title">临时目录</div>
+          </div>
+          <p class="install-step-desc">
+            Termux/Android 上 <span class="inline-code">/tmp</span> 只读，本仓库构建的 reasonix 已 patch 为使用
+            <span class="inline-code">~/.reasonix/tmp/</span> 作为临时目录。正常无需配置。
+          </p>
+          <p class="install-step-desc">
+            如遇 <span class="inline-code">permission denied</span> 或 <span class="inline-code">mkdir /tmp/...</span> 错误：
+          </p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-label">termux — bash</span>
+              <button class="copy-btn" data-copy="mkdir -p ~/.reasonix/tmp && chmod 755 ~/.reasonix/tmp">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <span>复制</span>
+              </button>
+            </div>
+            <pre><code><span class="c-comment"># 手动创建临时目录</span>
+<span class="c-prompt">$</span> mkdir -p ~/.reasonix/tmp
+<span class="c-prompt">$</span> chmod 755 ~/.reasonix/tmp
+
+<span class="c-comment"># 或用环境变量覆盖</span>
+<span class="c-prompt">$</span> <span class="c-var">TMPDIR</span>=~/.reasonix/tmp reasonix</code></pre>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 

@@ -466,3 +466,8 @@ echo -e "  $(log_ok 'pkg upgrade reasonix')"
 echo ""
 echo -e "${C_TITLE}查看可用版本:${C_RESET}"
 echo -e "  $(log_info 'apt list --all-versions reasonix')"
+
+echo ""
+echo -e "${C_TITLE}临时目录${C_RESET} $(log_dim '(Termux 上 /tmp 只读, 已自动改到此处)'):"
+echo -e "  $(log_path '~/.reasonix/tmp/')"
+echo -e "  $(log_dim '如遇 permission denied, 运行: mkdir -p ~/.reasonix/tmp')"

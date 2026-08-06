@@ -1,11 +1,21 @@
 name: 测试交叉编译 (不用 Docker)
 
-# 直接在 ubuntu runner 上交叉编译, 不用 termux-docker
-# 两个 job: arm64 + amd64, 都用 GOOS=android
-# 产出两个二进制, 打包成 zip 上传 artifact
+# 在对应架构的 runner 上原生编译 GOOS=android GOARCH=<arch>
+# 不用 docker, 直接用 actions/setup-go
+# 可通过菜单选择: all / arm64 / amd64
 
 on:
   workflow_dispatch:
+    inputs:
+      arch:
+        description: "编译架构"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - arm64
+          - amd64
 
 permissions:
   contents: read
@@ -31,19 +41,32 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "::notice::上游 tag: $TAG"
 
-  cross-build:
-    name: 交叉编译 ${{ matrix.arch }}
+  # 根据 inputs.arch 过滤要跑的架构
+  config:
+    name: 计算矩阵
     needs: detect
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          ARCH="${{ inputs.arch }}"
+          if [ "$ARCH" = "all" ]; then
+            echo 'matrix=[{"arch":"arm64","runner":"ubuntu-24.04-arm","filename":"reasonix-android-arm64"},{"arch":"amd64","runner":"ubuntu-latest","filename":"reasonix-android-amd64"}]' >> "$GITHUB_OUTPUT"
+          elif [ "$ARCH" = "arm64" ]; then
+            echo 'matrix=[{"arch":"arm64","runner":"ubuntu-24.04-arm","filename":"reasonix-android-arm64"}]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix=[{"arch":"amd64","runner":"ubuntu-latest","filename":"reasonix-android-amd64"}]' >> "$GITHUB_OUTPUT"
+          fi
+
+  cross-build:
+    name: 编译 ${{ matrix.arch }}
+    needs: [detect, config]
     strategy:
       matrix:
-        include:
-          - arch: arm64
-            goarch: arm64
-            filename: reasonix-android-arm64
-          - arch: amd64
-            goarch: amd64
-            filename: reasonix-android-amd64
-    runs-on: ubuntu-latest
+        include: ${{ fromJson(needs.config.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
     env:
       UPSTREAM_TAG: ${{ needs.detect.outputs.tag }}
     steps:
@@ -73,17 +96,17 @@ jobs:
           echo "--- Patched mutate.go ---"
           grep -n "reasonix-config-locks" internal/config/mutate.go | head -3
 
-      - name: 交叉编译 (GOOS=android GOARCH=${{ matrix.goarch }})
+      - name: 编译 (GOOS=android GOARCH=${{ matrix.arch }})
         working-directory: upstream
         run: |
           set -euo pipefail
           TAG="${UPSTREAM_TAG}"
           COMMIT=$(git rev-parse --short HEAD)
 
-          echo "=== go build (GOOS=android GOARCH=${{ matrix.goarch }} CGO_ENABLED=0) ==="
+          echo "=== go build (GOOS=android GOARCH=${{ matrix.arch }} CGO_ENABLED=0) ==="
           CGO_ENABLED=0 \
           GOOS=android \
-          GOARCH=${{ matrix.goarch }} \
+          GOARCH=${{ matrix.arch }} \
           go build \
             -trimpath \
             -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
@@ -100,39 +123,4 @@ jobs:
         with:
           name: ${{ matrix.filename }}
           path: ${{ matrix.filename }}
-          retention-days: 7
-
-  package:
-    name: 打包两个二进制为 zip
-    needs: cross-build
-    runs-on: ubuntu-latest
-    steps:
-      - name: 下载所有二进制
-        uses: actions/download-artifact@v8
-        with:
-          name: reasonix-android-arm64
-          path: ./arm64
-      - uses: actions/download-artifact@v8
-        with:
-          name: reasonix-android-amd64
-          path: ./amd64
-
-      - name: 整理文件 + 打包
-        run: |
-          mkdir -p release
-          cp arm64/reasonix-android-arm64 release/
-          cp amd64/reasonix-android-amd64 release/
-          chmod +x release/*
-          ls -lh release/
-
-          cd release
-          zip ../reasonix-android-binaries.zip .
-          cd ..
-          ls -lh reasonix-android-binaries.zip
-
-      - name: 上传 zip 为 artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: reasonix-android-binaries
-          path: reasonix-android-binaries.zip
           retention-days: 7

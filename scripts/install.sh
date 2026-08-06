@@ -32,6 +32,7 @@ APT_COMPONENT="main"                   # apt component
 MIRRORS=(
   "GitHub Raw|https://raw.githubusercontent.com/${OWNER_REPO}/${APT_BRANCH}"
   "GitHub Raw (美国代理)|https://github.cnxiaobai.com/https://raw.githubusercontent.com/${OWNER_REPO}/${APT_BRANCH}"
+  "GitHub Raw (CF优选代理)|https://v6.gh-proxy.org/https://raw.githubusercontent.com/${OWNER_REPO}/${APT_BRANCH}"
   "GitHub Pages|https://rxt.cc.cd"
   "Cloudflare Pages|https://cf.rxt.cc.cd"
   "jsDelivr CDN|https://cdn.jsdelivr.net/gh/${OWNER_REPO}@${APT_BRANCH}"
@@ -270,7 +271,7 @@ test_one_mirror() {
 }
 
 # 启动所有镜像的测速 (并发)
-log_dim "  启动 $(${#MIRRORS[@]}) 个并发测速任务..."
+log_dim "  启动 ${#MIRRORS[@]} 个并发测速任务..."
 for i in "${!MIRRORS[@]}"; do
   IFS='|' read -r _ url <<< "${MIRRORS[$i]}"
   test_one_mirror "$i" "$url" &
@@ -293,7 +294,7 @@ while true; do
   sleep 0.2
 done
 printf "\r  ${C_INFO}%s${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
-  "$(printf '%*s' "$BAR_WIDTH" '' | tr ' ' '█')" "100" "$total_mirrors" "$total_mirrors" "完成"
+  "$full_bar" "100" "$total_mirrors" "$total_mirrors" "完成"
 echo ""
 echo ""
 
@@ -336,8 +337,9 @@ for i in "${!MIRRORS[@]}"; do
   lat="${LATENCIES[$i]:-0}"
   [ "$lat" = "-2" ] && continue  # 跳过被跳过的镜像
   IFS='|' read -r name url <<< "${MIRRORS[$i]}"
-  # 跳过已经是代理/CDN 的镜像 (cnxiaobai/jsdelivr/pages.dev)
+  # 跳过已经是代理/CDN 的镜像 (cnxiaobai/gh-proxy/jsdelivr/pages.dev)
   [[ "$url" == *"cnxiaobai"* ]] && continue
+  [[ "$url" == *"gh-proxy"* ]] && continue
   [[ "$url" == *"jsdelivr"* ]] && continue
   [[ "$url" == *"pages.dev"* ]] && continue
   [[ "$url" == *"rxt.cc.cd"* ]] && continue
@@ -356,10 +358,7 @@ done
 if [ "$warn_github" = "true" ]; then
   echo ""
   log_warn "直连 GitHub ($gh_name) 延迟较高 ($gh_lat_str)"
-  echo "  $(log_dim '国内网络访问 raw.githubusercontent.com 经常被限速, 建议:')"
-  echo "  $(log_dim '  ·') 选 $(log_path 'GitHub Raw (美国代理)') (github.cnxiaobai.com 转发)"
-  echo "  $(log_dim '  ·') 或选 $(log_path 'GitHub Pages') (rxt.cc.cd) / $(log_path 'Cloudflare Pages') (cf.rxt.cc.cd)"
-  echo "  $(log_dim '  ·') 或选 $(log_path 'jsDelivr CDN') (国内有时也被墙)"
+  echo "  $(log_dim '建议选') $(log_path 'Cloudflare Pages') $(log_dim '(cf.rxt.cc.cd) 或') $(log_path 'GitHub Pages') $(log_dim '(rxt.cc.cd)')"
 fi
 
 if [ $valid_count -eq 0 ]; then
@@ -380,6 +379,7 @@ if [ $best_idx -ge 0 ]; then
   IFS='|' read -r best_name _ <<< "${MIRRORS[$best_idx]}"
   log_info "直接回车 = 选择延迟最低的镜像:"
   echo "    $(log_keyword "[$((best_idx+1))]") $(log_path "$best_name") $(log_num "(${best_latency}ms)")"
+  echo "    $(log_dim '推荐使用 Cloudflare Pages (cf.rxt.cc.cd) - 国内速度最稳定')"
 fi
 read -p "  请输入序号 (1-${#MIRRORS[@]}), 或直接回车使用推荐: " choice
 

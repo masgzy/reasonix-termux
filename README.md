@@ -59,6 +59,7 @@ reasonix --version
 |------|----------|
 | GitHub Raw | `https://raw.githubusercontent.com/masgzy/reasonix-termux/apt` |
 | GitHub Raw (美国代理) | `https://github.cnxiaobai.com/https://raw.githubusercontent.com/masgzy/reasonix-termux/apt` |
+| GitHub Raw (CF优选代理) | `https://v6.gh-proxy.org/https://raw.githubusercontent.com/masgzy/reasonix-termux/apt` |
 | GitHub Pages | `https://rxt.cc.cd/` |
 | Cloudflare Pages | `https://cf.rxt.cc.cd/` |
 | jsDelivr CDN | `https://cdn.jsdelivr.net/gh/masgzy/reasonix-termux@apt` |

@@ -3,6 +3,7 @@ name: 同步并发布 Termux 源
 # ---------------------------------------------------------------------------
 # 自动检测 esengine/DeepSeek-Reasonix 上游 CLI 版本变化
 # 构建 GOOS=android GOARCH=arm64 静态二进制 + deb 包 + apt 源元数据
+# (patch atotto/clipboard 绕过 Android seccomp faccessat2 bug)
 # 发布到本仓库的 orphan 分支 `apt`（类似 gh-pages 模式）
 #
 # 上游:    https://github.com/esengine/DeepSeek-Reasonix
@@ -132,45 +133,74 @@ jobs:
           path: upstream
           fetch-depth: 1
 
-      - name: 配置 Go 环境
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: upstream/go.mod
-          cache: false
-
-      - name: 构建 Reasonix (GOOS=android GOARCH=arm64)
-        working-directory: upstream
+      - name: 在 Termux 容器里构建 (GOHOSTOS=android, runtime.GOOS 真正为 android)
         run: |
           set -euo pipefail
           TAG="${UPSTREAM_TAG}"
           VER="${TAG#v}"
-          COMMIT=$(git -C . rev-parse --short HEAD)
 
-          mkdir -p ../build
-          LDFLAGS="-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}"
+          # 关键: 必须在 Termux (GOHOSTOS=android) 环境里构建
+          # 原因: ubuntu 的 Go 交叉编译 GOOS=android 时, runtime.GOOS 实际是 "linux"
+          #   (Go 的 android target 复用 linux runtime)
+          #   → eaccess.go 的 "if runtime.GOOS == android" 特判不生效
+          #   → 调 faccessat2 → Android seccomp 拒绝 → SIGSYS
+          # Termux 的 Go 是 GOHOSTOS=android, 编出来 runtime.GOOS 真正是 "android"
+          #   → 特判生效 → 返回 ENOSYS → 不调 faccessat2 → 不崩
+          # 参考: golang/go#57393
+          #
+          # 用 termux/termux-docker 镜像, 在 ubuntu runner 上跑 Termux 环境
+          docker run --rm \
+            -v "$PWD/upstream:/home/builder/work" \
+            -v "$PWD/build:/home/builder/out" \
+            -e TAG="${TAG}" \
+            --entrypoint /bin/bash \
+            termux/termux-docker:latest \
+            -c '
+              set -euo pipefail
+              cd /home/builder/work
 
-          # 关键: 必须用 GOOS=android 而不是 GOOS=linux
-          # 原因: atotto/clipboard 在 init() 阶段调 os/exec.LookPath → Eaccess
-          #   - GOOS=linux:  Eaccess → faccessat2 syscall (Linux 5.8+)
-          #                  Android seccomp 拒绝 faccessat2 → SIGSYS: bad system call
-          #   - GOOS=android: Eaccess 直接返回 ENOSYS, 调用方降级到 permission bits 检查
-          #                  不调 faccessat2, 不触发 seccomp
-          # 这个特判在 Go 1.26+ 的 src/internal/syscall/unix/eaccess.go 里
-          # 参考: https://github.com/golang/go/blob/release-branch.go1.26/src/internal/syscall/unix/eaccess.go
-          # 实测: 跑 GOOS=linux 编的二进制在 Android 16 / 内核 6.1 上同样崩 (seccomp 拒绝)
-          echo "::group::go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0)"
-          CGO_ENABLED=0 \
-          GOOS=android \
-          GOARCH=${{ env.GOARCH_TARGET }} \
-          go build \
-            -trimpath \
-            -ldflags "${LDFLAGS}" \
-            -o ../build/reasonix \
-            ./cmd/reasonix
-          echo "::endgroup::"
+              # 装 Go (Termux 的 Go 是 GOHOSTOS=android)
+              pkg install -y golang git
 
-          file ../build/reasonix
-          ls -lh ../build/reasonix
+              # 读 go.mod 要求的 Go 版本, 确认安装的版本兼容
+              REQUIRED_GO=$(head -1 go.mod | grep -oP "go \K[0-9]+\.[0-9]+" || echo "1.26")
+              INSTALLED_GO=$(go version | grep -oP "go\K[0-9]+\.[0-9]+\.[0-9]+")
+              echo "Required Go: $REQUIRED_GO, Installed: $INSTALLED_GO"
+
+              COMMIT=$(git rev-parse --short HEAD)
+
+              mkdir -p /home/builder/out
+
+              echo "=== go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0) ==="
+              CGO_ENABLED=0 \
+              GOOS=android \
+              GOARCH=arm64 \
+              go build \
+                -trimpath \
+                -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
+                -o /home/builder/out/reasonix \
+                ./cmd/reasonix
+
+              echo "=== build info ==="
+              go version -m /home/builder/out/reasonix | head -5
+              file /home/builder/out/reasonix
+              ls -lh /home/builder/out/reasonix
+            '
+
+          echo "=== 本地验证 ==="
+          file build/reasonix
+          ls -lh build/reasonix
+
+      - name: 验证 runtime.GOOS (必须是 android, 不能是 linux)
+        run: |
+          # 用 strings 找二进制里的 GOOS 常量
+          # 如果是 termux 编的, 会有 "android" 字符串
+          if strings build/reasonix | grep -q "runtime.GOOS = android"; then
+            echo "✓ runtime.GOOS = android (Termux 原生构建, faccessat2 特判会生效)"
+          else
+            echo "::warning::runtime.GOOS 可能不是 android, 二进制可能仍会 SIGSYS"
+            strings build/reasonix | grep -i "goos" | head -5 || true
+          fi
 
       - name: 打包 .deb
         run: |
@@ -321,6 +351,7 @@ jobs:
           git commit --allow-empty -m "发布 reasonix ${UPSTREAM_TAG}
 
           构建参数: GOOS=android GOARCH=arm64 CGO_ENABLED=0
+          Patch: atotto/clipboard init() 绕过 Android seccomp faccessat2 bug
           上游源码: https://github.com/${{ env.UPSTREAM_REPO }}/releases/tag/${UPSTREAM_TAG}"
 
           # Force push - orphan 分支每次都覆盖, 永远只有 1 个 commit

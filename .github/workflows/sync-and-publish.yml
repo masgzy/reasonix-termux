@@ -168,21 +168,20 @@ jobs:
           path: upstream
           fetch-depth: 1
 
-      - name: Patch main.go (设置 TMPDIR=~/.reasonix/tmp/, 解决 Termux /tmp 只读)
+      - name: Patch 源码 (TMPDIR + /tmp 硬编码)
         working-directory: upstream
         run: |
           set -euo pipefail
           # 根因: Reasonix 用 os.MkdirTemp("", ...) → 默认 /tmp
+          #   + internal/config/mutate.go 硬编码 filepath.Join("/", "tmp", ...)
           # Termux/Android 上 /tmp 只读 → "mkdir /tmp/reasonix-config-locks-...: permission denied"
-          # 修复: 在 main() 入口设 TMPDIR=~/.reasonix/tmp/, Go runtime 自动用它
-          MAIN_FILE="cmd/reasonix/main.go"
-          if [ ! -f "$MAIN_FILE" ]; then
-            echo "::error::未找到 $MAIN_FILE"
-            exit 1
-          fi
-          python3 "$GITHUB_WORKSPACE/scripts/patch-tmpdir.py" "$MAIN_FILE"
+          # 修复: 1. main() 入口设 TMPDIR=~/.reasonix/tmp/
+          #       2. mutate.go 把硬编码 /tmp 改成 os.TempDir()
+          python3 "$GITHUB_WORKSPACE/scripts/patch-tmpdir.py" .
           echo "--- Patched main() ---"
-          sed -n '/^func main/,/^}/p' "$MAIN_FILE" | head -15
+          sed -n '/^func main/,/^}/p' cmd/reasonix/main.go | head -15
+          echo "--- Patched mutate.go ---"
+          grep -n "reasonix-config-locks" internal/config/mutate.go | head -3
 
       - name: 在 Termux 容器里构建 (GOHOSTOS=android, runtime.GOOS 真正为 android)
         run: |

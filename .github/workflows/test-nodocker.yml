@@ -1,14 +1,14 @@
 name: 测试交叉编译 (不用 Docker)
 
-# 在对应架构的 runner 上原生编译 GOOS=android GOARCH=<arch>
-# 不用 docker, 直接用 actions/setup-go
+# 两个架构的 runner 都编译 GOOS=android GOARCH=arm64
+# 对比不同 GOHOSTARCH 编出来的二进制 runtime.GOOS 是否不同
 # 可通过菜单选择: all / arm64 / amd64
 
 on:
   workflow_dispatch:
     inputs:
       arch:
-        description: "编译架构"
+        description: "runner 架构 (都编译 android/arm64)"
         required: true
         default: all
         type: choice
@@ -41,7 +41,6 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "::notice::上游 tag: $TAG"
 
-  # 根据 inputs.arch 过滤要跑的架构
   config:
     name: 计算矩阵
     needs: detect
@@ -53,15 +52,15 @@ jobs:
         run: |
           ARCH="${{ inputs.arch }}"
           if [ "$ARCH" = "all" ]; then
-            echo 'matrix=[{"arch":"arm64","runner":"ubuntu-24.04-arm","filename":"reasonix-android-arm64"},{"arch":"amd64","runner":"ubuntu-latest","filename":"reasonix-android-amd64"}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix=[{"runner":"ubuntu-24.04-arm","label":"arm64-runner"},{"runner":"ubuntu-latest","label":"amd64-runner"}]' >> "$GITHUB_OUTPUT"
           elif [ "$ARCH" = "arm64" ]; then
-            echo 'matrix=[{"arch":"arm64","runner":"ubuntu-24.04-arm","filename":"reasonix-android-arm64"}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix=[{"runner":"ubuntu-24.04-arm","label":"arm64-runner"}]' >> "$GITHUB_OUTPUT"
           else
-            echo 'matrix=[{"arch":"amd64","runner":"ubuntu-latest","filename":"reasonix-android-amd64"}]' >> "$GITHUB_OUTPUT"
+            echo 'matrix=[{"runner":"ubuntu-latest","label":"amd64-runner"}]' >> "$GITHUB_OUTPUT"
           fi
 
   cross-build:
-    name: 编译 ${{ matrix.arch }}
+    name: 编译 android/arm64 (${{ matrix.label }})
     needs: [detect, config]
     strategy:
       matrix:
@@ -96,31 +95,36 @@ jobs:
           echo "--- Patched mutate.go ---"
           grep -n "reasonix-config-locks" internal/config/mutate.go | head -3
 
-      - name: 编译 (GOOS=android GOARCH=${{ matrix.arch }})
+      - name: 编译 (GOOS=android GOARCH=arm64, runner=${{ matrix.label }})
         working-directory: upstream
         run: |
           set -euo pipefail
           TAG="${UPSTREAM_TAG}"
           COMMIT=$(git rev-parse --short HEAD)
+          FILENAME="reasonix-android-arm64-${{ matrix.label }}"
 
-          echo "=== go build (GOOS=android GOARCH=${{ matrix.arch }} CGO_ENABLED=0) ==="
+          echo "=== runner info ==="
+          uname -m
+          go env GOHOSTOS GOHOSTARCH
+
+          echo "=== go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0) ==="
           CGO_ENABLED=0 \
           GOOS=android \
-          GOARCH=${{ matrix.arch }} \
+          GOARCH=arm64 \
           go build \
             -trimpath \
             -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
-            -o ../${{ matrix.filename }} \
+            -o ../${FILENAME} \
             ./cmd/reasonix
 
           echo "=== build info ==="
-          go version -m ../${{ matrix.filename }} | head -5
-          file ../${{ matrix.filename }}
-          ls -lh ../${{ matrix.filename }}
+          go version -m ../${FILENAME} | grep -E "GOOS|GOARCH|GOHOSTOS|GOHOSTARCH|path|go1"
+          file ../${FILENAME}
+          ls -lh ../${FILENAME}
 
       - name: 上传二进制为 artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.filename }}
-          path: ${{ matrix.filename }}
+          name: reasonix-android-arm64-${{ matrix.label }}
+          path: reasonix-android-arm64-${{ matrix.label }}
           retention-days: 7

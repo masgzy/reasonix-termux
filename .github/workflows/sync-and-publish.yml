@@ -234,6 +234,10 @@ jobs:
           sed -i 's/^          //' /tmp/build-in-termux.sh
 
           mkdir -p build
+          # 修复权限: 容器内 system 用户(1000) 需要写 build/ 目录
+          # 宿主机 runner 用户创建的目录默认只有 runner 能写
+          chmod 777 build
+
           docker run --rm \
             -v "$PWD/upstream:/home/builder/work" \
             -v "$PWD/build:/home/builder/out" \

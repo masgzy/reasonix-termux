@@ -189,9 +189,6 @@ jobs:
           set -euo pipefail
           cd /home/builder/work
 
-          # 修复 git dubious ownership (容器内 system 用户不信任宿主机挂载的目录)
-          git config --global --add safe.directory /home/builder/work
-
           # 切官方源 CF 缓存版 (packages-cf.termux.dev), 跳过镜像测试
           # 官方源 packages.termux.dev 服务器在伊朗, CF 缓存版全球更快
           # 直接覆盖 sources.list, 只留一行, 避免pkg自动测速
@@ -202,8 +199,12 @@ jobs:
           # 先 pkg update (跳过测速, 直接用上面配的官方源)
           pkg update -o
 
-          # 装 Go (Termux 的 Go 是 GOHOSTOS=android)
+          # 装 Go + git (Termux 的 Go 是 GOHOSTOS=android)
           pkg install -y golang git
+
+          # 修复 git dubious ownership (容器内 system 用户不信任宿主机挂载的目录)
+          # 必须在 pkg install git 之后跑
+          git config --global --add safe.directory /home/builder/work
 
           # 读 go.mod 要求的 Go 版本
           REQUIRED_GO=\$(head -1 go.mod | grep -oE "go [0-9]+\.[0-9]+" | cut -d' ' -f2 || echo "1.26")

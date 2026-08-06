@@ -148,6 +148,28 @@ uname -m
 
 应该是 `aarch64`。如果是 `armv7l` / `i686` / `x86_64`，本源不支持，请到上游 [Releases](https://github.com/esengine/DeepSeek-Reasonix/releases) 找对应架构的 tar.gz 手动安装。
 
+### 临时目录位置
+
+Termux/Android 上 `/tmp` 只读，本仓库构建的 reasonix 已 patch 为使用 `~/.reasonix/tmp/` 作为临时目录。
+
+正常情况无需手动配置。如果遇到 `permission denied` 或 `mkdir /tmp/...` 错误，检查：
+
+```bash
+# 确认临时目录可写
+ls -ld ~/.reasonix/tmp/
+
+# 如果不存在或权限不对，手动创建
+mkdir -p ~/.reasonix/tmp
+chmod 755 ~/.reasonix/tmp
+```
+
+也可以用环境变量覆盖：
+
+```bash
+export TMPDIR=~/.reasonix/tmp
+reasonix
+```
+
 ### `[trusted=yes]` 是什么意思
 
 本源的 `Release` 文件未做 GPG 签名。`[trusted=yes]` 告诉 apt 显式信任这个源，跳过签名校验。如果不加，apt 会拒绝拉取。

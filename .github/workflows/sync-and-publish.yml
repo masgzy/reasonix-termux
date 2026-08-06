@@ -125,6 +125,27 @@ jobs:
       - name: 检出本仓库 (main 分支)
         uses: actions/checkout@v7
 
+      - name: 缓存 Termux Docker 镜像
+        uses: actions/cache@v4
+        with:
+          path: /tmp/termux-docker-image
+          key: termux-docker-latest-v1
+          restore-keys: |
+            termux-docker-latest-
+
+      - name: 加载缓存的 Termux Docker 镜像 (如果有)
+        run: |
+          if [ -f /tmp/termux-docker-image/termux-docker.tar ]; then
+            echo "✓ 加载缓存的 Termux Docker 镜像"
+            docker load < /tmp/termux-docker-image/termux-docker.tar
+          else
+            echo "首次运行, 拉取 Termux Docker 镜像"
+            docker pull termux/termux-docker:latest
+            mkdir -p /tmp/termux-docker-image
+            docker save termux/termux-docker:latest > /tmp/termux-docker-image/termux-docker.tar
+            echo "✓ 镜像已缓存 ($(du -sh /tmp/termux-docker-image/termux-docker.tar | cut -f1))"
+          fi
+
       - name: 检出上游 Reasonix (tag ${{ env.UPSTREAM_TAG }})
         uses: actions/checkout@v7
         with:
@@ -132,6 +153,22 @@ jobs:
           ref: ${{ env.UPSTREAM_TAG }}
           path: upstream
           fetch-depth: 1
+
+      - name: Patch main.go (设置 TMPDIR=~/.reasonix/tmp/, 解决 Termux /tmp 只读)
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          # 根因: Reasonix 用 os.MkdirTemp("", ...) → 默认 /tmp
+          # Termux/Android 上 /tmp 只读 → "mkdir /tmp/reasonix-config-locks-...: permission denied"
+          # 修复: 在 main() 入口设 TMPDIR=~/.reasonix/tmp/, Go runtime 自动用它
+          MAIN_FILE="cmd/reasonix/main.go"
+          if [ ! -f "$MAIN_FILE" ]; then
+            echo "::error::未找到 $MAIN_FILE"
+            exit 1
+          fi
+          python3 "$GITHUB_WORKSPACE/scripts/patch-tmpdir.py" "$MAIN_FILE"
+          echo "--- Patched main() ---"
+          sed -n '/^func main/,/^}/p' "$MAIN_FILE" | head -15
 
       - name: 在 Termux 容器里构建 (GOHOSTOS=android, runtime.GOOS 真正为 android)
         run: |
@@ -141,44 +178,43 @@ jobs:
 
           # 关键: 必须在 Termux (GOHOSTOS=android) 环境里构建
           # 原因: ubuntu 的 Go 交叉编译 GOOS=android 时, runtime.GOOS 实际是 "linux"
-          #   (Go 的 android target 复用 linux runtime)
           #   → eaccess.go 的 "if runtime.GOOS == android" 特判不生效
           #   → 调 faccessat2 → Android seccomp 拒绝 → SIGSYS
           # Termux 的 Go 是 GOHOSTOS=android, 编出来 runtime.GOOS 真正是 "android"
-          #   → 特判生效 → 返回 ENOSYS → 不调 faccessat2 → 不崩
           # 参考: golang/go#57393
-          #
-          # 用 termux/termux-docker 镜像, 在 ubuntu runner 上跑 Termux 环境
-          # 注意: termux-docker 的 entrypoint 是 /entrypoint.sh, 默认 CMD=login
-          #       要跑命令用: docker run ... termux/termux-docker bash -c '...'
-          #       (不用 --entrypoint, 让默认 entrypoint 用 su 切到 system 用户执行)
 
-          # 把构建脚本写成文件, 挂载进去执行 (避免 docker run -c 里的引号嵌套问题)
-          cat > /tmp/build-in-termux.sh <<'BUILD_SCRIPT'
+          # 把构建脚本写成文件, 挂载进去执行
+          # 用双引号 heredoc 让宿主机展开 ${TAG}, 避免容器内变量未定义
+          cat > /tmp/build-in-termux.sh <<BUILD_SCRIPT
           set -euo pipefail
           cd /home/builder/work
+
+          # 切官方源 (packages.termux.dev), 跳过镜像测试
+          # GitHub Actions 是美国 IP, 官方源最快, 不需要测镜像
+          sed -i 's|^\(deb.*stable main\)\$|#\1\ndeb https://packages.termux.dev/apt/termux-main stable main|' \\
+            \$PREFIX/etc/apt/sources.list
+          echo "=== sources.list ==="
+          cat \$PREFIX/etc/apt/sources.list
 
           # 装 Go (Termux 的 Go 是 GOHOSTOS=android)
           pkg install -y golang git
 
           # 读 go.mod 要求的 Go 版本
-          REQUIRED_GO=$(head -1 go.mod | grep -oE "go [0-9]+\.[0-9]+" | cut -d' ' -f2 || echo "1.26")
-          INSTALLED_GO=$(go version | grep -oE "go[0-9]+\.[0-9]+\.[0-9]+" | sed 's/go//')
-          echo "Required Go: $REQUIRED_GO, Installed: $INSTALLED_GO"
+          REQUIRED_GO=\$(head -1 go.mod | grep -oE "go [0-9]+\.[0-9]+" | cut -d' ' -f2 || echo "1.26")
+          INSTALLED_GO=\$(go version | grep -oE "go[0-9]+\.[0-9]+\.[0-9]+" | sed 's/go//')
+          echo "Required Go: \$REQUIRED_GO, Installed: \$INSTALLED_GO"
 
-          TAG="${TAG}"
-          COMMIT=$(git rev-parse --short HEAD)
-
+          COMMIT=\$(git rev-parse --short HEAD)
           mkdir -p /home/builder/out
 
           echo "=== go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0) ==="
-          CGO_ENABLED=0 \
-          GOOS=android \
-          GOARCH=arm64 \
-          go build \
-            -trimpath \
-            -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
-            -o /home/builder/out/reasonix \
+          CGO_ENABLED=0 \\
+          GOOS=android \\
+          GOARCH=arm64 \\
+          go build \\
+            -trimpath \\
+            -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=\${COMMIT}" \\
+            -o /home/builder/out/reasonix \\
             ./cmd/reasonix
 
           echo "=== build info ==="
@@ -187,7 +223,7 @@ jobs:
           ls -lh /home/builder/out/reasonix
           BUILD_SCRIPT
 
-          # 去掉每行开头的缩进 (因为 heredoc 在 yaml run 块里被缩进了)
+          # 去掉每行开头的缩进
           sed -i 's/^          //' /tmp/build-in-termux.sh
 
           mkdir -p build
@@ -195,7 +231,6 @@ jobs:
             -v "$PWD/upstream:/home/builder/work" \
             -v "$PWD/build:/home/builder/out" \
             -v "/tmp/build-in-termux.sh:/home/builder/build.sh:ro" \
-            -e TAG="${TAG}" \
             termux/termux-docker:latest \
             bash /home/builder/build.sh
 
@@ -243,6 +278,47 @@ jobs:
           name: apt-root
           path: apt-root/
           retention-days: 7
+
+      - name: 在 Termux 容器里测试 reasonix -v
+        run: |
+          set -euo pipefail
+          chmod +x build/reasonix
+
+          cat > /tmp/test-in-termux.sh <<'TEST_SCRIPT'
+          set -euo pipefail
+          chmod +x /home/builder/reasonix
+
+          echo "=== file ==="
+          file /home/builder/reasonix
+
+          echo "=== ./reasonix -v ==="
+          /home/builder/reasonix -v 2>&1 || true
+          echo "(exit code: $?)"
+
+          echo "=== ./reasonix --version ==="
+          /home/builder/reasonix --version 2>&1 || true
+          echo "(exit code: $?)"
+
+          # 关键: 如果 -v 报 SIGSYS 就算失败
+          echo "=== SIGSYS 检查 ==="
+          OUTPUT=$(/home/builder/reasonix -v 2>&1 || true)
+          if echo "$OUTPUT" | grep -qi "SIGSYS\|bad system call"; then
+            echo "::error::二进制仍然 SIGSYS 崩溃"
+            echo "$OUTPUT" | tail -5
+            exit 1
+          else
+            echo "✓ 未检测到 SIGSYS, 二进制可正常运行"
+            echo "$OUTPUT" | head -3
+          fi
+          TEST_SCRIPT
+
+          sed -i 's/^          //' /tmp/test-in-termux.sh
+
+          docker run --rm \
+            -v "$PWD/build/reasonix:/home/builder/reasonix" \
+            -v "/tmp/test-in-termux.sh:/home/builder/test.sh:ro" \
+            termux/termux-docker:latest \
+            bash /home/builder/test.sh
 
   publish:
     name: 发布到 orphan `apt` 分支

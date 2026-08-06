@@ -133,17 +133,27 @@ jobs:
         uses: actions/cache@v6
         with:
           path: /tmp/termux-docker-image
-          key: termux-docker-latest-v1
+          key: termux-docker-latest-arm64-v1
           restore-keys: |
-            termux-docker-latest-
+            termux-docker-latest-arm64-
 
       - name: 加载缓存的 Termux Docker 镜像 (如果有)
         run: |
           if [ -f /tmp/termux-docker-image/termux-docker.tar ]; then
             echo "✓ 加载缓存的 Termux Docker 镜像"
             docker load < /tmp/termux-docker-image/termux-docker.tar
+            # 验证镜像架构 (必须是 arm64, 不能是 amd64)
+            IMG_ARCH=$(docker inspect termux/termux-docker:latest --format '{{.Architecture}}' 2>/dev/null || echo "unknown")
+            echo "镜像架构: $IMG_ARCH"
+            if [ "$IMG_ARCH" != "arm64" ] && [ "$IMG_ARCH" != "aarch64" ]; then
+              echo "::warning::缓存镜像架构是 $IMG_ARCH, 需要 arm64, 重新拉取"
+              docker rmi termux/termux-docker:latest 2>/dev/null || true
+              docker pull termux/termux-docker:latest
+              docker save termux/termux-docker:latest > /tmp/termux-docker-image/termux-docker.tar
+              echo "✓ 重新缓存 arm64 镜像 ($(du -sh /tmp/termux-docker-image/termux-docker.tar | cut -f1))"
+            fi
           else
-            echo "首次运行, 拉取 Termux Docker 镜像"
+            echo "首次运行, 拉取 Termux Docker 镜像 (arm64)"
             docker pull termux/termux-docker:latest
             mkdir -p /tmp/termux-docker-image
             docker save termux/termux-docker:latest > /tmp/termux-docker-image/termux-docker.tar

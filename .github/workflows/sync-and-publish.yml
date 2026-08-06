@@ -210,8 +210,8 @@ jobs:
           echo "=== sources.list ==="
           cat \$PREFIX/etc/apt/sources.list
 
-          # 先 apt update (用 apt 而非 pkg, pkg 会自动测速选镜像)
-          apt update -o
+          # 先 apt update
+          apt update
 
           # 装 Go + git + file (Termux 的 Go 是 GOHOSTOS=android)
           apt install -y golang git file

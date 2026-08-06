@@ -199,8 +199,8 @@ jobs:
           # 先 pkg update (跳过测速, 直接用上面配的官方源)
           pkg update -o
 
-          # 装 Go + git (Termux 的 Go 是 GOHOSTOS=android)
-          pkg install -y golang git
+          # 装 Go + git + file (Termux 的 Go 是 GOHOSTOS=android)
+          pkg install -y golang git file
 
           # 修复 git dubious ownership (容器内 system 用户不信任宿主机挂载的目录)
           # 必须在 pkg install git 之后跑
@@ -228,6 +228,22 @@ jobs:
           go version -m /home/builder/out/reasonix | head -5
           file /home/builder/out/reasonix
           ls -lh /home/builder/out/reasonix
+
+          # 直接在容器里测试 (省一次 docker run)
+          echo "=== 测试 ./reasonix -v ==="
+          chmod +x /home/builder/out/reasonix
+          TEST_OUTPUT=\$(/home/builder/out/reasonix -v 2>&1 || true)
+          echo "\$TEST_OUTPUT" | head -5
+          echo "(exit code: \$?)"
+
+          echo "=== SIGSYS 检查 ==="
+          if echo "\$TEST_OUTPUT" | grep -qi "SIGSYS\|bad system call"; then
+            echo "::error::二进制仍然 SIGSYS 崩溃"
+            echo "\$TEST_OUTPUT" | tail -10
+            exit 1
+          else
+            echo "✓ 未检测到 SIGSYS, 二进制可正常运行"
+          fi
           BUILD_SCRIPT
 
           # 去掉每行开头的缩进
@@ -289,47 +305,6 @@ jobs:
           name: apt-root
           path: apt-root/
           retention-days: 7
-
-      - name: 在 Termux 容器里测试 reasonix -v
-        run: |
-          set -euo pipefail
-          chmod +x build/reasonix
-
-          cat > /tmp/test-in-termux.sh <<'TEST_SCRIPT'
-          set -euo pipefail
-          chmod +x /home/builder/reasonix
-
-          echo "=== file ==="
-          file /home/builder/reasonix
-
-          echo "=== ./reasonix -v ==="
-          /home/builder/reasonix -v 2>&1 || true
-          echo "(exit code: $?)"
-
-          echo "=== ./reasonix --version ==="
-          /home/builder/reasonix --version 2>&1 || true
-          echo "(exit code: $?)"
-
-          # 关键: 如果 -v 报 SIGSYS 就算失败
-          echo "=== SIGSYS 检查 ==="
-          OUTPUT=$(/home/builder/reasonix -v 2>&1 || true)
-          if echo "$OUTPUT" | grep -qi "SIGSYS\|bad system call"; then
-            echo "::error::二进制仍然 SIGSYS 崩溃"
-            echo "$OUTPUT" | tail -5
-            exit 1
-          else
-            echo "✓ 未检测到 SIGSYS, 二进制可正常运行"
-            echo "$OUTPUT" | head -3
-          fi
-          TEST_SCRIPT
-
-          sed -i 's/^          //' /tmp/test-in-termux.sh
-
-          docker run --rm \
-            -v "$PWD/build/reasonix:/home/builder/reasonix" \
-            -v "/tmp/test-in-termux.sh:/home/builder/test.sh:ro" \
-            termux/termux-docker:latest \
-            bash /home/builder/test.sh
 
   publish:
     name: 发布到 orphan `apt` 分支

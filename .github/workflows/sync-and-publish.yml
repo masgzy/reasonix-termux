@@ -126,7 +126,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: 缓存 Termux Docker 镜像
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: /tmp/termux-docker-image
           key: termux-docker-latest-v1
@@ -189,12 +189,18 @@ jobs:
           set -euo pipefail
           cd /home/builder/work
 
-          # 切官方源 (packages.termux.dev), 跳过镜像测试
-          # GitHub Actions 是美国 IP, 官方源最快, 不需要测镜像
-          sed -i 's|^\(deb.*stable main\)\$|#\1\ndeb https://packages.termux.dev/apt/termux-main stable main|' \\
-            \$PREFIX/etc/apt/sources.list
+          # 修复 git dubious ownership (容器内 system 用户不信任宿主机挂载的目录)
+          git config --global --add safe.directory /home/builder/work
+
+          # 切官方源 CF 缓存版 (packages-cf.termux.dev), 跳过镜像测试
+          # 官方源 packages.termux.dev 服务器在伊朗, CF 缓存版全球更快
+          # 直接覆盖 sources.list, 只留一行, 避免pkg自动测速
+          echo "deb https://packages-cf.termux.dev/apt/termux-main stable main" > \$PREFIX/etc/apt/sources.list
           echo "=== sources.list ==="
           cat \$PREFIX/etc/apt/sources.list
+
+          # 先 pkg update (跳过测速, 直接用上面配的官方源)
+          pkg update -o
 
           # 装 Go (Termux 的 Go 是 GOHOSTOS=android)
           pkg install -y golang git

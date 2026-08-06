@@ -55,10 +55,10 @@ def patch_mutate_go(path):
             print(f"  skip {path} (already patched)")
             return True
 
-    # 匹配: filepath.Join(string(filepath.Separator), "tmp", fmt.Sprintf(...))
-    # 替换成: filepath.Join(os.TempDir(), fmt.Sprintf(...))
-    old = 'filepath.Join(string(filepath.Separator), "tmp", fmt.Sprintf("reasonix-config-locks-%x", digest[:8]))'
-    new = 'filepath.Join(os.TempDir(), fmt.Sprintf("reasonix-config-locks-%x", digest[:8])) // Patched by reasonix-termux'
+    # 匹配: filepath.Join(string(filepath.Separator), "tmp", fmt.Sprintf(...)), nil
+    # 替换成: filepath.Join(os.TempDir(), fmt.Sprintf(...)), nil
+    old = 'filepath.Join(string(filepath.Separator), "tmp", fmt.Sprintf("reasonix-config-locks-%x", digest[:8])), nil'
+    new = 'filepath.Join(os.TempDir(), fmt.Sprintf("reasonix-config-locks-%x", digest[:8])), nil // Patched by reasonix-termux'
 
     if old in content:
         content = content.replace(old, new, 1)

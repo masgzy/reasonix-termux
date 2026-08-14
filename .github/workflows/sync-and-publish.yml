@@ -248,7 +248,9 @@ jobs:
           echo "=== faccessat2 syscall 字符串检查 (应为 0) ==="
           # Go runtime 在 GOOS=android 时不会编译进 faccessat2 调用
           # 如果二进制里出现 faccessat2 字符串, 说明编译配置错了
-          FACCESSAT2_COUNT=$(strings build/reasonix | grep -ci 'faccessat2')
+          # 注意: grep -c 没匹配时返回 exit 1, 在 set -e + pipefail 下会让脚本退出
+          # 用 || true 兜底 (grep -c 仍然会输出 0)
+          FACCESSAT2_COUNT=$(strings build/reasonix | grep -c 'faccessat2' || true)
           echo "faccessat2 出现次数: $FACCESSAT2_COUNT"
           if [ "$FACCESSAT2_COUNT" -gt 0 ]; then
             echo "::warning::二进制里出现 faccessat2 字符串, 可能调用了被 Android seccomp 拦截的 syscall"

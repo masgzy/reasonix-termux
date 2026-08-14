@@ -122,47 +122,29 @@ jobs:
     name: 构建二进制 + deb + apt 源
     needs: detect
     if: needs.detect.outputs.should_publish == 'true'
-    # 关键: 必须用 ARM64 runner
-    # 原因: termux-docker 在 x86_64 上跑时, Go 的 GOHOSTOS=linux, 编出来 runtime.GOOS="linux"
-    #       在 arm64 上跑时, termux-docker 的 Go 是 GOHOSTOS=android, runtime.GOOS="android"
-    #       只有 runtime.GOOS="android" 时 eaccess.go 的特判才生效, 不调 faccessat2, 不崩
-    runs-on: ubuntu-24.04-arm
+    # 用普通 ubuntu-latest (amd64) runner 交叉编译即可
+    #
+    # 历史背景: 早期版本曾用 ubuntu-24.04-arm + termux-docker 镜像构建,
+    # 当时的注释声称 "ubuntu 交叉编译 GOOS=android 时 runtime.GOOS 实际是 linux"
+    # 这个说法是错的 - 实测验证 (Go 1.23) runtime.GOOS 是编译时常量,
+    # 由 GOOS 环境变量决定, 与 host OS 无关:
+    #   - GOOS=android 交叉编译 → runtime.GOOS == "android" ✓
+    #   - GOOS=linux  交叉编译 → runtime.GOOS == "linux"
+    #
+    # Go 源码证据 (src/syscall/syscall_linux.go Faccessat 函数):
+    #   if runtime.GOOS != "android" {
+    #       faccessat2(...)  // Android seccomp 拦截这个
+    #   }
+    #   // fallback to fstatat + permission bits
+    #
+    # 所以只要 GOOS=android 编译, 就不会调 faccessat2, 不会 SIGSYS
+    # 参考: golang/go#57393
+    runs-on: ubuntu-latest
     env:
       UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
     steps:
       - name: 检出本仓库 (main 分支)
         uses: actions/checkout@v7
-
-      - name: 缓存 Termux Docker 镜像
-        uses: actions/cache@v6
-        with:
-          path: /tmp/termux-docker-image
-          key: termux-docker-latest-arm64-v1
-          restore-keys: |
-            termux-docker-latest-arm64-
-
-      - name: 加载缓存的 Termux Docker 镜像 (如果有)
-        run: |
-          if [ -f /tmp/termux-docker-image/termux-docker.tar ]; then
-            echo "✓ 加载缓存的 Termux Docker 镜像"
-            docker load < /tmp/termux-docker-image/termux-docker.tar
-            # 验证镜像架构 (必须是 arm64, 不能是 amd64)
-            IMG_ARCH=$(docker inspect termux/termux-docker:latest --format '{{.Architecture}}' 2>/dev/null || echo "unknown")
-            echo "镜像架构: $IMG_ARCH"
-            if [ "$IMG_ARCH" != "arm64" ] && [ "$IMG_ARCH" != "aarch64" ]; then
-              echo "::warning::缓存镜像架构是 $IMG_ARCH, 需要 arm64, 重新拉取"
-              docker rmi termux/termux-docker:latest 2>/dev/null || true
-              docker pull termux/termux-docker:latest
-              docker save termux/termux-docker:latest > /tmp/termux-docker-image/termux-docker.tar
-              echo "✓ 重新缓存 arm64 镜像 ($(du -sh /tmp/termux-docker-image/termux-docker.tar | cut -f1))"
-            fi
-          else
-            echo "首次运行, 拉取 Termux Docker 镜像 (arm64)"
-            docker pull termux/termux-docker:latest
-            mkdir -p /tmp/termux-docker-image
-            docker save termux/termux-docker:latest > /tmp/termux-docker-image/termux-docker.tar
-            echo "✓ 镜像已缓存 ($(du -sh /tmp/termux-docker-image/termux-docker.tar | cut -f1))"
-          fi
 
       - name: 检出上游 Reasonix (tag ${{ env.UPSTREAM_TAG }})
         uses: actions/checkout@v7
@@ -172,10 +154,17 @@ jobs:
           path: upstream
           fetch-depth: 1
 
-      - name: Patch 源码 (TMPDIR + /tmp 硬编码)
+      - name: 设置 Go (基于 upstream go.mod)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: upstream/go.mod
+          cache: true   # 启用 go module 缓存 (基于 upstream/go.sum)
+
+      - name: Patch 源码 (TMPDIR + /tmp 硬编码 + clipboard LookPath)
         working-directory: upstream
         run: |
           set -euo pipefail
+          # Patch 1: TMPDIR + /tmp 硬编码
           # 根因: Reasonix 用 os.MkdirTemp("", ...) → 默认 /tmp
           #   + internal/config/mutate.go 硬编码 filepath.Join("/", "tmp", ...)
           # Termux/Android 上 /tmp 只读 → "mkdir /tmp/reasonix-config-locks-...: permission denied"
@@ -187,149 +176,83 @@ jobs:
           echo "--- Patched mutate.go ---"
           grep -n "reasonix-config-locks" internal/config/mutate.go | head -3
 
-      - name: 在 Termux 容器里构建 (GOHOSTOS=android, runtime.GOOS 真正为 android)
+          # Patch 2: atotto/clipboard init() 跳过 LookPath
+          # 性能优化 (非必须, 不会 SIGSYS, 但能省启动时间):
+          #   原实现 init() 调多次 exec.LookPath (xclip/xsel/wlcopy/...)
+          #   每次 LookPath → findExecutable → Eaccess → Faccessat
+          #   虽然 GOOS=android 时不会调 faccessat2 (不 SIGSYS),
+          #   但仍会走 fstatat fallback, 浪费启动时间
+          #   patch 后直接设 termux-clipboard-get/set, 不调 LookPath
+          CLIPBOARD_FILE=$(find . -path '*/atto/clipboard/clipboard_unix.go' 2>/dev/null | head -1)
+          if [ -n "$CLIPBOARD_FILE" ]; then
+            python3 "$GITHUB_WORKSPACE/scripts/patch-clipboard.py" "$CLIPBOARD_FILE"
+            echo "--- Patched $CLIPBOARD_FILE ---"
+            sed -n '/^func init/,/^}/p' "$CLIPBOARD_FILE" | head -15
+          else
+            echo "::warning::未找到 atotto/clipboard/clipboard_unix.go, 跳过 clipboard patch"
+          fi
+
+      - name: 交叉编译 (GOOS=android GOARCH=arm64 CGO_ENABLED=0)
+        working-directory: upstream
         run: |
           set -euo pipefail
           TAG="${UPSTREAM_TAG}"
-          VER="${TAG#v}"
+          COMMIT=$(git rev-parse --short HEAD)
 
-          # 关键: 必须在 Termux (GOHOSTOS=android) 环境里构建
-          # 原因: ubuntu 的 Go 交叉编译 GOOS=android 时, runtime.GOOS 实际是 "linux"
-          #   → eaccess.go 的 "if runtime.GOOS == android" 特判不生效
-          #   → 调 faccessat2 → Android seccomp 拒绝 → SIGSYS
-          # Termux 的 Go 是 GOHOSTOS=android, 编出来 runtime.GOOS 真正是 "android"
-          # 参考: golang/go#57393
+          mkdir -p ../build
 
-          # 把构建脚本写成文件, 挂载进去执行
-          # 用双引号 heredoc 让宿主机展开 ${TAG}, 避免容器内变量未定义
-          cat > /tmp/build-in-termux.sh <<BUILD_SCRIPT
-          set -euo pipefail
-          cd /home/builder/work
-
-          # 切官方源 CF 缓存版 (packages-cf.termux.dev), 跳过镜像测试
-          # 官方源 packages.termux.dev 服务器在伊朗, CF 缓存版全球更快
-          # 直接覆盖 sources.list, 只留一行, 避免pkg自动测速
-          echo "deb https://packages-cf.termux.dev/apt/termux-main stable main" > \$PREFIX/etc/apt/sources.list
-          echo "=== sources.list ==="
-          cat \$PREFIX/etc/apt/sources.list
-
-          # 先 apt update
-          apt update
-
-          # 装 Go + git + file (Termux 的 Go 是 GOHOSTOS=android)
-          apt install -y golang git file
-
-          # 修复 git dubious ownership (容器内 system 用户不信任宿主机挂载的目录)
-          # 必须在 pkg install git 之后跑
-          git config --global --add safe.directory /home/builder/work
-
-          # 读 go.mod 要求的 Go 版本
-          # 默认值用 1.21 (Go 1.21 是 termux-docker 稳定版能装的最低版本, 比 1.26 更稳)
-          # 实际 go.mod 一定有 go 行, 默认值只在边缘 case (go.mod 缺 go 行) 时兜底
-          REQUIRED_GO=\$(head -1 go.mod | grep -oE "go [0-9]+\.[0-9]+" | cut -d' ' -f2 || echo "1.21")
-          INSTALLED_GO=\$(go version | grep -oE "go[0-9]+\.[0-9]+\.[0-9]+" | sed 's/go//')
-          echo "Required Go: \$REQUIRED_GO, Installed: \$INSTALLED_GO"
-
-          COMMIT=\$(git rev-parse --short HEAD)
-          mkdir -p /home/builder/out
-
-          echo "=== go build (GOOS=android GOARCH=arm64 CGO_ENABLED=0) ==="
-          CGO_ENABLED=0 \\
-          GOOS=android \\
-          GOARCH=arm64 \\
-          go build \\
-            -trimpath \\
-            -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=\${COMMIT}" \\
-            -o /home/builder/out/reasonix \\
+          echo "=== go build (host=$(go version)) ==="
+          CGO_ENABLED=0 \
+          GOOS=android \
+          GOARCH=arm64 \
+          go build \
+            -trimpath \
+            -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
+            -o ../build/reasonix \
             ./cmd/reasonix
 
           echo "=== build info ==="
-          go version -m /home/builder/out/reasonix | head -5
-          file /home/builder/out/reasonix
-          ls -lh /home/builder/out/reasonix
+          ls -lh ../build/reasonix
+          file ../build/reasonix
 
-          # 直接在容器里测试 (省一次 docker run)
-          echo "=== 测试 ./reasonix -v ==="
-          chmod +x /home/builder/out/reasonix
-          TEST_OUTPUT=\$(/home/builder/out/reasonix -v 2>&1 || true)
-          echo "原始输出:"
-          echo "\$TEST_OUTPUT" | head -10
-
-          echo "=== 结果检查 ==="
-          # 1. Exec format error = 容器架构和二进制架构不匹配
-          if echo "\$TEST_OUTPUT" | grep -qi "cannot execute\|Exec format"; then
-            echo "::error::二进制无法执行 (Exec format error) - 容器架构不匹配"
-            exit 1
-          fi
-          # 2. SIGSYS = faccessat2 被 seccomp 拒绝
-          if echo "\$TEST_OUTPUT" | grep -qi "SIGSYS\|bad system call"; then
-            echo "::error::二进制 SIGSYS 崩溃 (faccessat2 被 seccomp 拒绝)"
-            echo "\$TEST_OUTPUT" | tail -10
-            exit 1
-          fi
-          # 3. 空输出 = 可能静默崩溃
-          if [ -z "\$TEST_OUTPUT" ]; then
-            echo "::error::二进制无输出, 可能静默崩溃"
-            exit 1
-          fi
-          echo "✓ 二进制可正常运行"
-          echo "输出前 3 行: \$(echo "\$TEST_OUTPUT" | head -3)"
-          BUILD_SCRIPT
-
-          # 去掉每行开头的缩进
-          sed -i 's/^          //' /tmp/build-in-termux.sh
-
-          mkdir -p build
-          # 修复权限: 容器内 system 用户(1000) 需要写 build/ 目录
-          # 宿主机 runner 用户创建的目录默认只有 runner 能写
-          chmod 777 build
-
-          docker run --rm \
-            -v "$PWD/upstream:/home/builder/work" \
-            -v "$PWD/build:/home/builder/out" \
-            -v "/tmp/build-in-termux.sh:/home/builder/build.sh:ro" \
-            termux/termux-docker:latest \
-            bash /home/builder/build.sh
-
-          echo "=== 本地验证 ==="
-          file build/reasonix
-          ls -lh build/reasonix
-
-      - name: 验证 runtime.GOOS (必须是 android, 不能是 linux)
+      - name: 静态验证二进制 (不运行, host 跑不了 android/arm64 二进制)
         run: |
           set -euo pipefail
-          # 用 `go version -m <binary>` 读二进制头里的 build settings
-          # 比 strings grep 可靠: Go 工具链明确写入 GOOS/GOARCH/CGO_ENABLED
-          # 输出形如:
-          #   /home/builder/out/reasonix: buildid=..., module=...
-          #     build  GOOS=android
-          #     build  GOARCH=arm64
-          #     build  CGO_ENABLED=0
-          echo "=== go version -m build/reasonix ==="
-          go version -m build/reasonix | grep -E "GOOS|GOARCH|CGO_ENABLED|GOOS|build" | head -10 || true
+          # 不能在 ubuntu amd64 上运行 android/arm64 二进制 (需要 /system/bin/linker64)
+          # 改用静态验证: go version -m + strings + file
+          echo "=== file ==="
+          file build/reasonix
 
+          echo ""
+          echo "=== go version -m (build settings) ==="
+          go version -m build/reasonix | head -20
+
+          echo ""
+          echo "=== GOOS / GOARCH 强校验 ==="
           BUILD_GOOS=$(go version -m build/reasonix | awk '/^\s+build\s+GOOS=/{split($2,a,"="); print a[2]}')
           BUILD_GOARCH=$(go version -m build/reasonix | awk '/^\s+build\s+GOARCH=/{split($2,a,"="); print a[2]}')
-
           echo "构建时 GOOS=$BUILD_GOOS GOARCH=$BUILD_GOARCH"
 
-          if [ "$BUILD_GOOS" = "android" ]; then
-            echo "✓ runtime.GOOS = android (Termux 原生构建, faccessat2 特判会生效)"
-          elif [ -z "$BUILD_GOOS" ]; then
-            # 极端情况: 二进制 build info 被裁掉了 (-ldflags "-s -w" 不会删 build info, 但更激进的 strip 可能删)
-            # 兜底用 strings + file 双重确认
-            echo "::warning::build info 不可读, 退回 strings 检查"
-            if strings build/reasonix | grep -q "android"; then
-              echo "✓ strings 里找到 'android' (弱判定, 可能误判)"
-            else
-              echo "::error::二进制里完全没有 android 字符串, 几乎肯定不是 android GOOS"
-              exit 1
-            fi
-          else
-            echo "::error::runtime.GOOS=$BUILD_GOOS (应为 android), 二进制会在 Android 上 SIGSYS 崩溃"
-            echo "原因: ubuntu 的 Go 交叉编译 GOOS=android 时, runtime.GOOS 实际是 'linux'"
-            echo "解决: 必须在 termux-docker (GOHOSTOS=android) 容器里构建, 而不是宿主机交叉编译"
+          if [ "$BUILD_GOOS" != "android" ]; then
+            echo "::error::GOOS=$BUILD_GOOS (应为 android), 二进制会在 Android 上 SIGSYS 崩溃"
+            echo "排查: 检查 go build 命令是否设置了 GOOS=android 环境变量"
             exit 1
+          fi
+          if [ "$BUILD_GOARCH" != "arm64" ]; then
+            echo "::error::GOARCH=$BUILD_GOARCH (应为 arm64)"
+            exit 1
+          fi
+          echo "✓ GOOS=android GOARCH=arm64 (faccessat2 特判会生效, 不会 SIGSYS)"
+
+          echo ""
+          echo "=== faccessat2 syscall 字符串检查 (应为 0) ==="
+          # Go runtime 在 GOOS=android 时不会编译进 faccessat2 调用
+          # 如果二进制里出现 faccessat2 字符串, 说明编译配置错了
+          FACCESSAT2_COUNT=$(strings build/reasonix | grep -ci 'faccessat2')
+          echo "faccessat2 出现次数: $FACCESSAT2_COUNT"
+          if [ "$FACCESSAT2_COUNT" -gt 0 ]; then
+            echo "::warning::二进制里出现 faccessat2 字符串, 可能调用了被 Android seccomp 拦截的 syscall"
+            echo "(注: 字符串存在不等于一定调用, 但 GOOS=android 时正常应为 0)"
           fi
 
       - name: 打包 .deb

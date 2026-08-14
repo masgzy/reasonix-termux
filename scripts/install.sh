@@ -9,21 +9,28 @@
 # ============================================================================
 #
 # 用法:
-#   方式 1 (推荐): 下载后编辑再运行
+#   方式 1 (推荐): bash <(curl) - stdin 是终端, 交互最顺
+#     bash <(curl -sL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.sh)
+#
+#   方式 2 (替代): bash <(wget) - 无 curl 环境用
+#     bash <(wget -qO- -o- https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.sh)
+#
+#   方式 3 (兼容): curl | bash - 老式写法, 脚本会自动从 /dev/tty 读输入
+#     curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.sh | bash
+#
+#   方式 4 (自定义): 下载后编辑再运行
 #     curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.sh -o install-reasonix.sh
 #     nano install-reasonix.sh   # 修改 OWNER_REPO 和 MIRRORS
 #     bash install-reasonix.sh
 #
-#   方式 2 (一行命令, 默认配置):
-#     curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.sh | bash
-#
-#   方式 3 (非交互模式, 用于脚本/CI):
+#   方式 5 (非交互模式, 用于脚本/CI):
 #     REASONIX_NONINTERACTIVE=1 bash install-reasonix.sh
 #     # 全部使用默认值: 切清华源 + 选延迟最低的镜像
 #
 # 交互说明:
-#   - 方式 2 (curl | bash) 也支持交互, 脚本会从 /dev/tty 读取输入
-#   - 设置 REASONIX_NONINTERACTIVE=1 可跳过所有询问, 使用默认值
+#   - 方式 1/2 (bash <(...)) 推荐: bash 的 stdin 是终端, read 直接能读输入
+#   - 方式 3 (curl | bash): 脚本检测到 stdin 是管道后会改从 /dev/tty 读取输入
+#   - 方式 5 (非交互): REASONIX_NONINTERACTIVE=1 跳过所有询问, 使用默认值
 #
 # ============================================================================
 

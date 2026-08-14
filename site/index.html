@@ -957,6 +957,29 @@
         <p class="section-sub">在 Termux 里执行。脚本会询问是否切清华源、测镜像延迟、自动选最快的。直接回车就用推荐项。</p>
       </div>
 
+      <div class="callout" style="margin-bottom: 24px;">
+        <p class="callout-title">懒人一行命令（任选其一）</p>
+        <p>不想分步走的话，下面三种写法等价，按你习惯选一个：</p>
+        <div class="code-block">
+          <div class="code-block-header">
+            <span class="code-block-label">termux — bash &lt;(curl) 推荐</span>
+            <button class="copy-btn" data-copy="bash <(curl -sL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+              </svg>
+              <span>复制</span>
+            </button>
+          </div>
+          <pre><code><span class="c-prompt">$</span> bash <span class="c-kw">&lt;(</span><span class="c-info">curl</span> -sL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh<span class="c-kw">)</span>
+
+<span class="c-comment"># 或者 wget 版 (无 curl 时用):</span>
+<span class="c-prompt">$</span> bash <span class="c-kw">&lt;(</span><span class="c-info">wget</span> -qO- -o- https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh<span class="c-kw">)</span>
+
+<span class="c-comment"># 或者老式 curl | bash (脚本会自动从 /dev/tty 读输入):</span>
+<span class="c-prompt">$</span> <span class="c-info">curl</span> -fsSL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh <span class="c-comment">|</span> bash</code></pre>
+        </div>
+      </div>
+
       <div class="install-grid">
 
         <div class="install-step">
@@ -1205,6 +1228,8 @@
         <span>orphan branch publishing</span>
         <span>·</span>
         <span>auto-sync every 6h</span>
+        <span>·</span>
+        <span>scripts & workflow under <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener" style="color:var(--text-sub);text-decoration:underline dotted;">GPL-3.0</a></span>
       </div>
     </div>
   </footer>

@@ -10,7 +10,21 @@
 
 ### 方式一：一键脚本（推荐）
 
-在 Termux 里执行：
+任选下面三种写法之一，效果都一样：
+
+**写法 1：`bash <(curl ...)`（推荐，stdin 是终端，交互最顺）**
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh)
+```
+
+**写法 2：`bash <(wget ...)`（无 curl 环境用）**
+
+```bash
+bash <(wget -qO- -o- https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh)
+```
+
+**写法 3：`curl | bash`（兼容老式写法，脚本会自动从 `/dev/tty` 读输入）**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh | bash
@@ -35,8 +49,6 @@ curl -fsSL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts
 > ```bash
 > REASONIX_NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh)"
 > ```
->
-> **`curl | bash` 模式说明**：脚本会自动检测 stdin 是否为管道，如果是，则从 `/dev/tty` 读取交互输入，所以 `curl ... | bash` 也能正常询问。
 
 ### 方式二：手动安装
 
@@ -147,13 +159,16 @@ hash -r
 
 ### 装上后跑 `reasonix` 报 `Exec format error`
 
-架构不匹配。本源只提供 `aarch64`。查手机架构：
+架构不匹配。本源目前只提供 `aarch64`（覆盖 99% 的现代 Android 手机）。查手机架构：
 
 ```bash
 uname -m
 ```
 
-应该是 `aarch64`。如果是 `armv7l` / `i686` / `x86_64`，本源不支持，请到上游 [Releases](https://github.com/esengine/DeepSeek-Reasonix/releases) 找对应架构的 tar.gz 手动安装。
+- 如果输出 `aarch64`，说明装错了版本，重跑安装脚本即可。
+- 如果输出 `armv7l` / `i686` / `x86_64`，当前暂未提供对应架构。**如果有需要，请到 [本仓库 issues](https://github.com/masgzy/reasonix-termux/issues) 提个 issue 说明架构和设备型号，会按需增加构建。**
+
+需求多的话会加上多架构并行构建，需求少则保持现状（避免浪费 CI 时间）。
 
 ### 临时目录位置
 
@@ -246,4 +261,8 @@ v1.20.0 实测 11.19 MB。远低于 GitHub push（100 MB）、raw.githubusercont
 
 ## License
 
-本仓库的脚本和 workflow 以 MIT 协议发布。Reasonix 本身的 license 见上游仓库。
+本仓库的脚本、workflow、安装脚本、主页 HTML 以 **GPL-3.0** 协议发布。Reasonix 本身的 license 见上游仓库。
+
+- 上游 [esengine/DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix) 的版权与 license 归上游所有
+- 本仓库仅做 Termux 平台的分发与构建脚本，所有派生作品须遵循 GPL-3.0
+- 完整协议文本见 [LICENSE](./LICENSE) 或 <https://www.gnu.org/licenses/gpl-3.0.html>

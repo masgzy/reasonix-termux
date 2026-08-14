@@ -8,6 +8,10 @@ name: 同步并发布 Termux 源
 #
 # 上游:    https://github.com/esengine/DeepSeek-Reasonix
 # 安装源:  deb [trusted=yes] https://raw.githubusercontent.com/<OWNER>/<REPO>/apt stable main
+#
+# License: GPL-3.0
+#   本 workflow 及仓库内所有脚本/资源按 GPL-3.0 发布
+#   详见仓库根 LICENSE 文件或 https://www.gnu.org/licenses/gpl-3.0.html
 # ---------------------------------------------------------------------------
 
 on:
@@ -393,6 +397,12 @@ jobs:
           # .nojekyll: 告诉 GitHub Pages 跳过 Jekyll 处理
           # 避免 Jekyll 忽略下划线开头的文件/目录, 也加快 Pages 部署
           touch .nojekyll
+
+          # CNAME: GitHub Pages 自定义域名
+          # 内容为裸域名 rxt.cc.cd, 启用 GitHub Pages 后会自动绑定
+          # (Cloudflare Pages 不需要此文件, 但留着不会影响)
+          echo "rxt.cc.cd" > CNAME
+          echo "✓ 已写入 CNAME (rxt.cc.cd)"
 
           # 写一个 README 给访问者
           cat > README.md <<'README_EOF'

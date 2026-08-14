@@ -1162,6 +1162,7 @@
       </div>
 
       <div class="install-grid">
+
         <div class="install-step">
           <div class="install-step-head">
             <div class="install-step-title">临时目录</div>
@@ -1191,6 +1192,101 @@
 <span class="c-prompt">$</span> <span class="c-var">TMPDIR</span>=~/.reasonix/tmp reasonix</code></pre>
           </div>
         </div>
+
+        <div class="install-step">
+          <div class="install-step-head">
+            <div class="install-step-title">架构不匹配</div>
+          </div>
+          <p class="install-step-desc">
+            本源目前只提供 <span class="inline-code">aarch64</span>（覆盖 99% 现代安卓手机）。
+            如果安装后跑 <span class="inline-code">reasonix</span> 报
+            <span class="inline-code">Exec format error</span>，先查架构：
+          </p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-label">termux — bash</span>
+              <button class="copy-btn" data-copy="uname -m">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <span>复制</span>
+              </button>
+            </div>
+            <pre><code><span class="c-prompt">$</span> uname -m
+aarch64   <span class="c-comment"># → 装对了, 重跑安装脚本</span>
+armv7l    <span class="c-comment"># → 32位 ARM, 暂未提供</span>
+i686      <span class="c-comment"># → x86, 暂未提供</span>
+x86_64    <span class="c-comment"># → x86_64, 暂未提供</span></code></pre>
+          </div>
+          <p class="install-step-desc" style="margin-top: 12px;">
+            <strong>非 aarch64 用户</strong>：如果有需要，请到
+            <a href="https://github.com/masgzy/reasonix-termux/issues" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:underline dotted;">本仓库 issues</a>
+            提个 issue 说明架构和设备型号，会按需增加构建。需求多就加多架构并行构建，需求少保持现状。
+          </p>
+        </div>
+
+        <div class="install-step">
+          <div class="install-step-head">
+            <div class="install-step-title">更新与卸载</div>
+          </div>
+          <p class="install-step-desc">
+            装好后不用再跑安装脚本。本仓库每 6 小时自动同步上游新版本并推到 apt 分支。
+          </p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-label">termux — bash</span>
+              <button class="copy-btn" data-copy="pkg update && pkg upgrade reasonix">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <span>复制</span>
+              </button>
+            </div>
+            <pre><code><span class="c-comment"># 升级所有包（含 reasonix）</span>
+<span class="c-prompt">$</span> pkg update <span class="c-comment">&&</span> pkg upgrade
+
+<span class="c-comment"># 只升级 reasonix</span>
+<span class="c-prompt">$</span> pkg upgrade reasonix
+
+<span class="c-comment"># 卸载</span>
+<span class="c-prompt">$</span> pkg uninstall reasonix
+<span class="c-prompt">$</span> rm $PREFIX/etc/apt/sources.list.d/reasonix.list
+<span class="c-prompt">$</span> pkg update</code></pre>
+          </div>
+        </div>
+
+        <div class="install-step">
+          <div class="install-step-head">
+            <div class="install-step-title">源与镜像</div>
+          </div>
+          <p class="install-step-desc">
+            <span class="inline-code">[trusted=yes]</span> 告诉 apt 跳过 GPG 签名校验（本源未签名，必须加，否则 apt 拒绝拉取）。
+            如果默认镜像变慢，可以切换到其他镜像：
+          </p>
+          <div class="code-block">
+            <div class="code-block-header">
+              <span class="code-block-label">termux — bash</span>
+              <button class="copy-btn" data-copy="nano $PREFIX/etc/apt/sources.list.d/reasonix.list">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                </svg>
+                <span>复制</span>
+              </button>
+            </div>
+            <pre><code><span class="c-comment"># 编辑 sources.list.d/reasonix.list</span>
+<span class="c-prompt">$</span> nano $PREFIX/etc/apt/sources.list.d/reasonix.list
+
+<span class="c-comment"># 改成 (例) Cloudflare Pages:</span>
+<span class="c-comment">deb [trusted=yes] https://cf.rxt.cc.cd stable main</span>
+
+<span class="c-comment"># 保存后刷新</span>
+<span class="c-prompt">$</span> pkg update</code></pre>
+          </div>
+          <p class="install-step-desc" style="margin-top: 12px;">
+            可用镜像前缀见上方 <a href="#mirrors" style="color:var(--accent);text-decoration:underline dotted;">镜像列表</a> section。
+          </p>
+        </div>
+
       </div>
     </div>
   </section>

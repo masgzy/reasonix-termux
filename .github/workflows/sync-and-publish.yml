@@ -224,7 +224,9 @@ jobs:
           git config --global --add safe.directory /home/builder/work
 
           # 读 go.mod 要求的 Go 版本
-          REQUIRED_GO=\$(head -1 go.mod | grep -oE "go [0-9]+\.[0-9]+" | cut -d' ' -f2 || echo "1.26")
+          # 默认值用 1.21 (Go 1.21 是 termux-docker 稳定版能装的最低版本, 比 1.26 更稳)
+          # 实际 go.mod 一定有 go 行, 默认值只在边缘 case (go.mod 缺 go 行) 时兜底
+          REQUIRED_GO=\$(head -1 go.mod | grep -oE "go [0-9]+\.[0-9]+" | cut -d' ' -f2 || echo "1.21")
           INSTALLED_GO=\$(go version | grep -oE "go[0-9]+\.[0-9]+\.[0-9]+" | sed 's/go//')
           echo "Required Go: \$REQUIRED_GO, Installed: \$INSTALLED_GO"
 
@@ -295,13 +297,39 @@ jobs:
 
       - name: 验证 runtime.GOOS (必须是 android, 不能是 linux)
         run: |
-          # 用 strings 找二进制里的 GOOS 常量
-          # 如果是 termux 编的, 会有 "android" 字符串
-          if strings build/reasonix | grep -q "runtime.GOOS = android"; then
+          set -euo pipefail
+          # 用 `go version -m <binary>` 读二进制头里的 build settings
+          # 比 strings grep 可靠: Go 工具链明确写入 GOOS/GOARCH/CGO_ENABLED
+          # 输出形如:
+          #   /home/builder/out/reasonix: buildid=..., module=...
+          #     build  GOOS=android
+          #     build  GOARCH=arm64
+          #     build  CGO_ENABLED=0
+          echo "=== go version -m build/reasonix ==="
+          go version -m build/reasonix | grep -E "GOOS|GOARCH|CGO_ENABLED|GOOS|build" | head -10 || true
+
+          BUILD_GOOS=$(go version -m build/reasonix | awk '/^\s+build\s+GOOS=/{split($2,a,"="); print a[2]}')
+          BUILD_GOARCH=$(go version -m build/reasonix | awk '/^\s+build\s+GOARCH=/{split($2,a,"="); print a[2]}')
+
+          echo "构建时 GOOS=$BUILD_GOOS GOARCH=$BUILD_GOARCH"
+
+          if [ "$BUILD_GOOS" = "android" ]; then
             echo "✓ runtime.GOOS = android (Termux 原生构建, faccessat2 特判会生效)"
+          elif [ -z "$BUILD_GOOS" ]; then
+            # 极端情况: 二进制 build info 被裁掉了 (-ldflags "-s -w" 不会删 build info, 但更激进的 strip 可能删)
+            # 兜底用 strings + file 双重确认
+            echo "::warning::build info 不可读, 退回 strings 检查"
+            if strings build/reasonix | grep -q "android"; then
+              echo "✓ strings 里找到 'android' (弱判定, 可能误判)"
+            else
+              echo "::error::二进制里完全没有 android 字符串, 几乎肯定不是 android GOOS"
+              exit 1
+            fi
           else
-            echo "::warning::runtime.GOOS 可能不是 android, 二进制可能仍会 SIGSYS"
-            strings build/reasonix | grep -i "goos" | head -5 || true
+            echo "::error::runtime.GOOS=$BUILD_GOOS (应为 android), 二进制会在 Android 上 SIGSYS 崩溃"
+            echo "原因: ubuntu 的 Go 交叉编译 GOOS=android 时, runtime.GOOS 实际是 'linux'"
+            echo "解决: 必须在 termux-docker (GOHOSTOS=android) 容器里构建, 而不是宿主机交叉编译"
+            exit 1
           fi
 
       - name: 打包 .deb

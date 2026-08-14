@@ -359,13 +359,15 @@ while true; do
   bar=""
   for ((k=0; k<filled; k++)); do bar+="█"; done
   for ((k=0; k<empty; k++)); do bar+="░"; done
-  printf "\r  ${C_INFO}${bar}${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
+  # \r 回到行首 + \033[K 清到行尾, 避免上一帧的末尾字符残留 (短串变长串时会有阴影)
+  printf "\r\033[K  ${C_INFO}${bar}${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
     "$pct" "$done_count" "$total_mirrors" "测速中..."
   [ "$done_count" -ge "$total_mirrors" ] && break
   sleep 0.2
 done
-printf "\r  ${C_INFO}%s${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
-  "$full_bar" "100" "$total_mirrors" "$total_mirrors" "完成"
+# 最后一帧: 100% 完成, 同样清行尾
+printf "\r\033[K  ${C_INFO}%s${C_RESET} ${C_NUMBER}%3d%%${C_RESET} ${C_DIM}(%d/%d)${C_RESET} ${C_PATH}%-20s${C_RESET}" \
+  "$bar" "100" "$total_mirrors" "$total_mirrors" "完成"
 echo ""
 echo ""
 

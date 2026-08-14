@@ -30,6 +30,13 @@ curl -fsSL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts
 > nano install.sh
 > bash install.sh
 > ```
+>
+> **非交互模式**（脚本/CI 场景，跳过所有询问，使用默认值：切清华源 + 选延迟最低的镜像）：
+> ```bash
+> REASONIX_NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh)"
+> ```
+>
+> **`curl | bash` 模式说明**：脚本会自动检测 stdin 是否为管道，如果是，则从 `/dev/tty` 读取交互输入，所以 `curl ... | bash` 也能正常询问。
 
 ### 方式二：手动安装
 

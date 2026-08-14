@@ -17,6 +17,14 @@
 #   方式 2 (一行命令, 默认配置):
 #     curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.sh | bash
 #
+#   方式 3 (非交互模式, 用于脚本/CI):
+#     REASONIX_NONINTERACTIVE=1 bash install-reasonix.sh
+#     # 全部使用默认值: 切清华源 + 选延迟最低的镜像
+#
+# 交互说明:
+#   - 方式 2 (curl | bash) 也支持交互, 脚本会从 /dev/tty 读取输入
+#   - 设置 REASONIX_NONINTERACTIVE=1 可跳过所有询问, 使用默认值
+#
 # ============================================================================
 
 set -e
@@ -179,12 +187,68 @@ if [ "$OWNER_REPO" = "your-username/your-repo" ] || [ -z "$OWNER_REPO" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 交互模式检测
+# ---------------------------------------------------------------------------
+# 场景: curl | bash 时, bash 的 stdin 是 curl 的管道输出, read 拿不到终端输入
+# 解决: 让 read 从 /dev/tty (控制终端) 读, 这样 pipe 模式下也能交互
+# 兜底: 设置 REASONIX_NONINTERACTIVE=1 时跳过所有询问, 使用默认值
+
+INTERACTIVE_MODE="tty"   # tty=可交互, noninteractive=用默认值
+
+if [ "${REASONIX_NONINTERACTIVE:-0}" = "1" ]; then
+  INTERACTIVE_MODE="noninteractive"
+  log_warn "已启用非交互模式 (REASONIX_NONINTERACTIVE=1), 全部使用默认值"
+elif [ ! -t 0 ]; then
+  # stdin 不是 TTY, 典型场景: curl | bash
+  if [ -e /dev/tty ] && [ -r /dev/tty ] && [ -w /dev/tty ]; then
+    log_info "检测到 pipe 模式 (curl | bash), 输入将从终端 /dev/tty 读取"
+    INTERACTIVE_MODE="tty"
+  else
+    log_warn "检测到非交互环境且无法访问 /dev/tty, 将使用默认值"
+    log_warn "如需交互, 请下载脚本后执行: bash install-reasonix.sh"
+    INTERACTIVE_MODE="noninteractive"
+  fi
+fi
+
+# 通用询问函数
+# 用法: ask_prompt "提示语" 变量名 [默认值]
+# 行为:
+#   - 交互模式: 显示提示, 从 /dev/tty 或 stdin 读取, 空输入用默认值
+#   - 非交互模式: 直接用默认值, 不询问
+ask_prompt() {
+  local prompt="$1"
+  local var_name="$2"
+  local default_val="${3:-}"
+
+  if [ "$INTERACTIVE_MODE" = "noninteractive" ]; then
+    eval "$var_name=\"\$default_val\""
+    log_dim "  $prompt [默认: $default_val]"
+    return 0
+  fi
+
+  local input=""
+  if [ -t 0 ]; then
+    # stdin 是 TTY, 直接 read
+    # || true 防止 set -e 在 EOF (Ctrl+D) 时杀掉脚本
+    read -p "$prompt" input || true
+  else
+    # stdin 是 pipe (curl | bash), 从 /dev/tty 读
+    read -p "$prompt" input < /dev/tty || true
+  fi
+
+  # 应用默认值 (空输入或 Ctrl+D 时使用)
+  if [ -z "$input" ]; then
+    input="$default_val"
+  fi
+  eval "$var_name=\"\$input\""
+}
+
+# ---------------------------------------------------------------------------
 # Step 1: 询问是否切换清华源
 # ---------------------------------------------------------------------------
 echo -e "${C_TITLE}[1/5] Termux 官方源${C_RESET}"
 log_dim "  清华源 (tuna) 通常比默认源快很多 (国内尤其明显)"
-read -p "  是否切换到清华源? [Y/n] " switch_tsinghua
-switch_tsinghua=${switch_tsinghua:-Y}
+ask_prompt "  是否切换到清华源? [Y/n] " switch_tsinghua "Y"
 
 if [[ "$switch_tsinghua" =~ ^[Yy]$ ]]; then
   log_info "切换中..."
@@ -381,7 +445,21 @@ if [ $best_idx -ge 0 ]; then
   echo "    $(log_keyword "[$((best_idx+1))]") $(log_path "$best_name") $(log_num "(${best_latency}ms)")"
   echo "    $(log_dim '推荐使用 Cloudflare Pages (cf.rxt.cc.cd) - 国内速度最稳定')"
 fi
-read -p "  请输入序号 (1-${#MIRRORS[@]}), 或直接回车使用推荐: " choice
+# ask_prompt 在非交互模式下传空字符串, 这里需要特殊处理: 默认选 best_idx
+if [ "$INTERACTIVE_MODE" = "noninteractive" ]; then
+  if [ $best_idx -lt 0 ]; then
+    log_error "非交互模式下没有可用镜像, 退出"
+    exit 1
+  fi
+  selected=$best_idx
+  log_ok "非交互模式: 已自动选择 $(log_path "${MIRRORS[$selected]%%|*}")"
+else
+  if [ -t 0 ]; then
+    read -p "  请输入序号 (1-${#MIRRORS[@]}), 或直接回车使用推荐: " choice || true
+  else
+    read -p "  请输入序号 (1-${#MIRRORS[@]}), 或直接回车使用推荐: " choice < /dev/tty || true
+  fi
+fi
 
 # 清理输入: 去除前后空格、回车、不可见字符
 choice=$(printf '%s' "$choice" | tr -d '[:space:]')
@@ -427,7 +505,22 @@ log_info "将写入: $(log_path "$PREFIX/etc/apt/sources.list.d/reasonix.list")"
 log_info "源行:   $(log_keyword "$source_line")"
 echo ""
 
-echo "$source_line" > "$PREFIX/etc/apt/sources.list.d/reasonix.list"
+# 写入源文件 - 防御性写法:
+#   1. mkdir -p 父目录 (Termux 标准安装下 sources.list.d 一定存在, 但 fork 环境/精简安装可能没有)
+#   2. 如果旧文件存在, 先备份 (避免覆盖用户手工配置)
+#   3. touch 创建空文件 (确保文件存在, 即使 echo 失败也有个空文件可诊断)
+#   4. echo 写入内容
+LIST_FILE="$PREFIX/etc/apt/sources.list.d/reasonix.list"
+LIST_DIR="$(dirname "$LIST_FILE")"
+mkdir -p "$LIST_DIR"
+if [ -f "$LIST_FILE" ]; then
+  cp "$LIST_FILE" "${LIST_FILE}.bak"
+  log_dim "  旧源已备份到 ${LIST_FILE}.bak"
+fi
+touch "$LIST_FILE"
+echo "$source_line" > "$LIST_FILE"
+log_ok "已写入: $LIST_FILE"
+log_dim "  内容: $source_line"
 
 log_info "执行 pkg update..."
 pkg update

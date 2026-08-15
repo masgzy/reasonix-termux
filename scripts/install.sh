@@ -182,14 +182,25 @@ if [ -z "$PREFIX" ] || [ ! -d "/data/data/com.termux" ]; then
   exit 1
 fi
 
-# 检查 OWNER_REPO 是否还是默认值 (防止用户 fork 后忘了改)
-if [ "$OWNER_REPO" = "your-username/your-repo" ] || [ -z "$OWNER_REPO" ]; then
-  log_error "OWNER_REPO 未配置. 请下载脚本后编辑顶部的 OWNER_REPO 变量"
+# 检查 OWNER_REPO 是否配置 (空值或占位符就报错)
+# 注意: 默认值已经是 masgzy/reasonix-termux, fork 用户如果不改会装本仓库的源 (预期行为)
+# 这里只拦截明显的占位符, 不拦截默认值
+if [ -z "$OWNER_REPO" ] || \
+   [[ "$OWNER_REPO" == *"your-username"* ]] || \
+   [[ "$OWNER_REPO" == *"your-repo"* ]] || \
+   [[ "$OWNER_REPO" == *"your-project"* ]]; then
+  log_error "OWNER_REPO 未配置 ($OWNER_REPO)"
   echo ""
-  log_dim "下载并编辑后再运行:"
-  echo "  curl -fsSL https://raw.githubusercontent.com/${OWNER_REPO}/main/scripts/install.sh -o install-reasonix.sh"
+  log_dim "请下载脚本后编辑顶部的 OWNER_REPO 变量:"
+  echo "  curl -fsSL https://raw.githubusercontent.com/masgzy/reasonix-termux/main/scripts/install.sh -o install-reasonix.sh"
   echo "  nano install-reasonix.sh"
   echo "  bash install-reasonix.sh"
+  exit 1
+fi
+
+# 校验 OWNER_REPO 格式 (必须是 owner/repo 形式)
+if ! [[ "$OWNER_REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
+  log_error "OWNER_REPO 格式错误: '$OWNER_REPO' (应为 owner/repo 形式)"
   exit 1
 fi
 
@@ -259,9 +270,23 @@ ask_prompt "  是否切换到清华源? [Y/n] " switch_tsinghua "Y"
 
 if [[ "$switch_tsinghua" =~ ^[Yy]$ ]]; then
   log_info "切换中..."
-  sed -i 's@^\(deb.*stable main\)$@#\1\ndeb https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main stable main@' "$PREFIX/etc/apt/sources.list"
+  # 幂等检查: 如果 sources.list 已经有清华源, 不重复添加
+  # (用户重跑脚本时, 避免出现多行清华源 / 重复注释)
+  SOURCES_LIST="$PREFIX/etc/apt/sources.list"
+  TSINGHUA_URL="https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main"
+  if grep -qF "$TSINGHUA_URL" "$SOURCES_LIST" 2>/dev/null; then
+    log_ok "清华源已存在, 跳过切换"
+  else
+    # 把所有未注释的 deb 行注释掉, 追加清华源
+    # 用临时文件 + mv 保证原子性 (sed -i 在某些 Termux 版本对 sources.list 有问题)
+    TMP_SOURCES=$(mktemp)
+    sed 's@^\(deb.*stable main\)$@#\1@' "$SOURCES_LIST" > "$TMP_SOURCES"
+    echo "deb $TSINGHUA_URL stable main" >> "$TMP_SOURCES"
+    cat "$TMP_SOURCES" > "$SOURCES_LIST"  # 不用 mv, 保留原文件权限/owner
+    rm -f "$TMP_SOURCES"
+    log_ok "清华源切换完成"
+  fi
   apt update
-  log_ok "清华源切换完成"
 else
   log_info "保持默认源, 执行 pkg update..."
   pkg update

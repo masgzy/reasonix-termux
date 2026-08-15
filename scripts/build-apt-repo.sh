@@ -54,10 +54,14 @@ echo "Generating Release file..."
 RELEASE_FILE="$OUT_DIR/dists/$DIST/Release"
 
 # 收集所有需要校验的文件 (相对 dists/$DIST 路径)
+# 用 mktemp 避免并发构建时多个 job 写同一个 /tmp 文件冲突
+FILES_LIST=$(mktemp)
+RELEASE_TAIL=$(mktemp)
+trap "rm -f \"$FILES_LIST\" \"$RELEASE_TAIL\"" EXIT
 ( cd "$OUT_DIR/dists/$DIST" && \
   find . -type f ! -name Release ! -name InRelease \
   | sed 's|^\./||' \
-  | sort > /tmp/files_to_hash.txt )
+  | sort > "$FILES_LIST" )
 
 # 生成 Release 头部
 DATE=$(date -Ru)
@@ -75,28 +79,27 @@ EOF
 
 # 追加 MD5/SHA1/SHA256 校验和
 ( cd "$OUT_DIR/dists/$DIST" && \
-  echo "MD5Sum:" >> /tmp/release_tail.txt && \
+  echo "MD5Sum:" >> "$RELEASE_TAIL" && \
   while read -r f; do
     SIZE=$(stat -c '%s' "$f")
     MD5=$(md5sum "$f" | awk '{print $1}')
-    printf " %s %16d %s\n" "$MD5" "$SIZE" "$f" >> /tmp/release_tail.txt
-  done < /tmp/files_to_hash.txt && \
-  echo "SHA1:" >> /tmp/release_tail.txt && \
+    printf " %s %16d %s\n" "$MD5" "$SIZE" "$f" >> "$RELEASE_TAIL"
+  done < "$FILES_LIST" && \
+  echo "SHA1:" >> "$RELEASE_TAIL" && \
   while read -r f; do
     SIZE=$(stat -c '%s' "$f")
     SHA1=$(sha1sum "$f" | awk '{print $1}')
-    printf " %s %16d %s\n" "$SHA1" "$SIZE" "$f" >> /tmp/release_tail.txt
-  done < /tmp/files_to_hash.txt && \
-  echo "SHA256:" >> /tmp/release_tail.txt && \
+    printf " %s %16d %s\n" "$SHA1" "$SIZE" "$f" >> "$RELEASE_TAIL"
+  done < "$FILES_LIST" && \
+  echo "SHA256:" >> "$RELEASE_TAIL" && \
   while read -r f; do
     SIZE=$(stat -c '%s' "$f")
     SHA256=$(sha256sum "$f" | awk '{print $1}')
-    printf " %s %16d %s\n" "$SHA256" "$SIZE" "$f" >> /tmp/release_tail.txt
-  done < /tmp/files_to_hash.txt
+    printf " %s %16d %s\n" "$SHA256" "$SIZE" "$f" >> "$RELEASE_TAIL"
+  done < "$FILES_LIST"
 )
 
-cat /tmp/release_tail.txt >> "$RELEASE_FILE"
-rm -f /tmp/release_tail.txt /tmp/files_to_hash.txt
+cat "$RELEASE_TAIL" >> "$RELEASE_FILE"
 
 echo ""
 echo "Release file: $RELEASE_FILE"

@@ -821,7 +821,7 @@
           <span class="dot"></span>
           <span>auto-sync</span>
           <span class="sep">·</span>
-          <span>v1.20.0</span>
+          <span data-version>latest</span>
           <span class="sep">·</span>
           <span>aarch64</span>
           <span class="sep">·</span>
@@ -846,7 +846,7 @@
         </div>
         <div class="hero-stats">
           <div>
-            <div class="stat-num">11.2<span class="unit">MB</span></div>
+            <div class="stat-num">~11<span class="unit">MB</span></div>
             <div class="stat-label">deb 大小</div>
           </div>
           <div>
@@ -1378,6 +1378,48 @@ x86_64    <span class="c-comment"># → x86_64, 暂未提供</span></code></pre>
         }
       });
     });
+
+    // ============================================================
+    // 动态版本号: 从 apt 分支的 Packages 文件读取最新版本
+    // ============================================================
+    // 页面硬编码的 "latest" 会在页面加载后替换成实际版本号
+    // 如果 fetch 失败 (CORS / 网络), 保持 "latest" 不变, 不报错
+    (function() {
+      // apt 分支的 Packages 文件路径 (相对当前页面)
+      // 如果页面在 GitHub Pages (rxt.cc.cd) 上, 同源访问 apt 分支文件需要走 raw.githubusercontent
+      // 如果页面在 raw.githubusercontent.com 上, 直接相对路径
+      var baseURL;
+      if (location.hostname === 'raw.githubusercontent.com' || location.hostname === 'cdn.jsdelivr.net') {
+        // 直接在 raw/jsdelivr 上, 相对路径就是 apt 分支
+        baseURL = location.pathname.replace(/\/[^/]*$/, '');
+      } else {
+        // GitHub Pages / Cloudflare Pages / 自定义域名
+        // 走 raw.githubusercontent.com (CORS 允许)
+        baseURL = 'https://raw.githubusercontent.com/masgzy/reasonix-termux/apt';
+      }
+
+      var packagesURL = baseURL + '/dists/stable/main/binary-aarch64/Packages';
+
+      fetch(packagesURL, { cache: 'no-cache' })
+        .then(function(r) {
+          if (!r.ok) throw new Error('HTTP ' + r.status);
+          return r.text();
+        })
+        .then(function(text) {
+          // 解析 Version: x.y.z
+          var m = text.match(/^Version:\s*(\S+)/m);
+          if (m) {
+            var ver = m[1];
+            document.querySelectorAll('[data-version]').forEach(function(el) {
+              el.textContent = 'v' + ver;
+            });
+          }
+        })
+        .catch(function(e) {
+          // 静默失败, 保持 "latest"
+          if (window.console) console.log('version fetch failed:', e.message);
+        });
+    })();
   </script>
 
 </body>

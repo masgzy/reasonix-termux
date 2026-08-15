@@ -249,7 +249,7 @@ dists/stable/main/binary-aarch64/reasonix_<ver>_aarch64.deb
 
 ### deb 大小
 
-v1.20.0 实测 11.19 MB。远低于 GitHub push（100 MB）、raw.githubusercontent.com（100 MB）、jsDelivr（50 MB）、Cloudflare Pages（25 MB）所有限制。
+约 11 MB（具体随版本略有浮动）。远低于 GitHub push（100 MB）、raw.githubusercontent.com（100 MB）、jsDelivr（50 MB）、Cloudflare Pages（25 MB）所有限制。
 
 ### 发布机制
 

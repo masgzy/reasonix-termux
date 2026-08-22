@@ -1,0 +1,21 @@
+Origin: Reasonix Termux Repo
+Label: reasonix-termux
+Suite: stable
+Codename: stable
+Version: 1.0
+Date: Sat, 22 Aug 2026 13:10:07 +0000
+Architectures: aarch64
+Components: main
+Description: Auto-published Termux apt repository for Reasonix CLI (Android/aarch64)
+MD5Sum:
+ 171133a318feab63575be08e4ff715c6              735 main/binary-aarch64/Packages
+ 005a8ba478ec45ee79175fae916f865e              513 main/binary-aarch64/Packages.gz
+ f378f8e6dc03acc4324ff054b21c8d90         15155214 main/binary-aarch64/reasonix_1.31.3_aarch64.deb
+SHA1:
+ a6b8ef0ddbc0ebde15b16385f6a73d138a6931b7              735 main/binary-aarch64/Packages
+ ced356614a58be40f05639ccbd7ee63e110dbb70              513 main/binary-aarch64/Packages.gz
+ 6d6671cd308bc1abec5c311bc2c6eac22ec862e6         15155214 main/binary-aarch64/reasonix_1.31.3_aarch64.deb
+SHA256:
+ 2e0d20226cfcf85c3ecf108370e0e50efc04b8d033b14334ab69c23eeeec2810              735 main/binary-aarch64/Packages
+ 12560e70e1070b5e228c84e2dcbb447993cdc3b66a765c44bf4907bc9467bd6e              513 main/binary-aarch64/Packages.gz
+ 2f141f5da21ab64e3faa09e0b8111fef52593e3887021f2eb8a30178e03257eb         15155214 main/binary-aarch64/reasonix_1.31.3_aarch64.deb

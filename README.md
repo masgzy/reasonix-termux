@@ -99,8 +99,6 @@ reasonix --version
 
 两种装的是同一份二进制，按需选其一即可。
 
-> npm 自动发布需要做一次性手动配置（加 NPM_TOKEN secret 或 OIDC trusted publisher），见 [npm 发布设置教程](./docs/NPM_PUBLISH_SETUP.md)。
-
 ---
 
 ## 镜像

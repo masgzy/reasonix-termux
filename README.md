@@ -4,7 +4,7 @@
 
 自动同步上游 release，构建 Android/aarch64 静态二进制，通过 apt 源发布。装一次，后续 `pkg upgrade` 自动跟版。
 
-考虑到大多数 harness 均使用 npm 发布二进制文件，目前已注册 npm 包，但尚未实现功能。
+考虑到大多数 harness 均使用 npm 发布二进制文件，本仓库也已注册 npm 包 [`reasonix-termux`](https://www.npmjs.com/package/reasonix-termux)，并通过同一条 GitHub Actions 流水线自动发布到 npm（见下方"方式三：npm 安装"）。
 
 本项目部分文件使用了 Agent 进行编写，部分地方可能考虑不周，若有问题请提issue，描述你遇到了什么问题。
 
@@ -73,6 +73,33 @@ pkg install reasonix
 # 4. 验证
 reasonix --version
 ```
+
+### 方式三：npm 安装（如果已有 Node.js）
+
+适合已经在 Termux 里装了 Node.js 的用户，或者偏好用 npm 管理全局 CLI 工具的用户。
+
+```bash
+# 需要先有 Node.js (Termux 里 pkg install nodejs)
+npm install -g reasonix-termux
+
+# 验证
+reasonix --version
+```
+
+包名 [`reasonix-termux`](https://www.npmjs.com/package/reasonix-termux)：
+- 直接打包 `GOOS=android GOARCH=arm64 CGO_ENABLED=0` 静态二进制，跟 apt 源装的是同一个二进制
+- `package.json` 里限定 `os: ["android"], cpu: ["arm64"]`，非 Termux/Android-arm64 平台 `npm install` 会以 `EBADPLATFORM` 拒装（不会污染其他平台）
+- 发布时启用 npm [provenance](https://docs.npmjs.com/generating-provenance-statements) 证明，可通过 `npm audit signatures` 验证来源
+- 走 GitHub Actions 自动发布，跟 apt 源同一条流水线（detect → build → publish_npm），上游出 release 后约 6 小时内同步
+
+**apt vs npm 选哪个？**
+
+- 走 apt 源：和 Termux 包管理器集成，`pkg upgrade` 自动跟版，不依赖 Node.js
+- 走 npm：需要先装 Node.js，但可以走 `npx reasonix` / `npm update -g` 等熟悉的 Node 工作流
+
+两种装的是同一份二进制，按需选其一即可。
+
+> npm 自动发布需要做一次性手动配置（加 NPM_TOKEN secret 或 OIDC trusted publisher），见 [npm 发布设置教程](./docs/NPM_PUBLISH_SETUP.md)。
 
 ---
 
@@ -220,8 +247,10 @@ apt list --upgradable reasonix
 
 - **上游**：[esengine/DeepSeek-Reasonix](https://github.com/esengine/DeepSeek-Reasonix) — Reasonix CLI 官方仓库
 - **本仓库**：仅做 Termux 分发。源码、二进制构建逻辑、商标、版权归上游所有
-- 本仓库每 6 小时检查上游 release，发现新版本即自动构建 `GOOS=android GOARCH=arm64 CGO_ENABLED=0` 静态二进制，打包成 deb，推送到本仓库的 `apt` 分支
-- 本仓库不对上游源码做任何修改，仅重新编译
+- 本仓库每 6 小时检查上游 release，发现新版本即自动构建 `GOOS=android GOARCH=arm64 CGO_ENABLED=0` 静态二进制，双通道发布：
+  - 打包成 deb，推送到本仓库的 `apt` 分支（apt 源）
+  - 直接打包二进制，发布到 npm 包 [`reasonix-termux`](https://www.npmjs.com/package/reasonix-termux)
+- 本仓库不对上游源码做实质性修改，仅做 Termux 适配（`/tmp` 路径 + clipboard LookPath bypass）
 
 如果遇到 Reasonix 本身的 bug（命令行参数、模型行为、prompt 处理等），请到上游提 issue：<https://github.com/esengine/DeepSeek-Reasonix/issues>
 
@@ -259,7 +288,14 @@ dists/stable/main/binary-aarch64/reasonix_<ver>_aarch64.deb
 
 ### 发布机制
 
-本仓库用 GitHub Actions 每 6 小时检查上游，自动构建并通过 orphan 分支发布。`apt` 分支永远只有 1 个 commit，体积恒等于当前 deb 大小，不会随版本累积。
+本仓库用 GitHub Actions 每 6 小时检查上游，自动构建并通过双通道发布：
+
+| 通道 | 目标 | 触发 job | 产物 |
+|------|------|---------|------|
+| apt 源 | 本仓库 orphan `apt` 分支 | `publish` (force-push, 单 commit) | `dists/stable/.../*.deb` |
+| npm | npmjs.com `reasonix-termux` | `publish_npm` (跑在 build 之后) | `reasonix-termux@<version>` (含 android/arm64 二进制) |
+
+`apt` 分支永远只有 1 个 commit，体积恒等于当前 deb 大小，不会随版本累积。npm 包按上游版本号发布（如 `v1.31.3` → `reasonix-termux@1.31.3`），每次发布会自动检查 npm registry 是否已存在该版本，避免重复发布。
 
 发布历史通过 main 分支的 `version.txt` commit log 保留。
 

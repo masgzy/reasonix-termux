@@ -1,0 +1,48 @@
+{
+  "name": "reasonix-termux",
+  "version": "0.0.0",
+  "description": "Prebuilt reasonix CLI binary for Termux (Android/aarch64). Auto-built from esengine/DeepSeek-Reasonix with GOOS=android GOARCH=arm64.",
+  "license": "MIT",
+  "author": "masgzy/reasonix-termux contributors",
+  "homepage": "https://github.com/masgzy/reasonix-termux#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/masgzy/reasonix-termux.git",
+    "directory": "npm"
+  },
+  "bugs": {
+    "url": "https://github.com/masgzy/reasonix-termux/issues"
+  },
+  "keywords": [
+    "reasonix",
+    "deepseek",
+    "deepseek-reasonix",
+    "termux",
+    "android",
+    "aarch64",
+    "arm64",
+    "cli",
+    "ai",
+    "agent",
+    "coding-agent",
+    "binary",
+    "prebuilt"
+  ],
+  "os": [
+    "android"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "bin": {
+    "reasonix": "bin/reasonix"
+  },
+  "files": [
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}

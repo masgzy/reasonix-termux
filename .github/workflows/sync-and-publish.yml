@@ -614,9 +614,25 @@ jobs:
         # 用 @v7 浮动 tag: 自动跟进 v7.x.x 补丁
         # 注意: 不传 registry-url, 让 OIDC 流程接管认证
         #       (传了会在 .npmrc 写空 token 占位符, 干扰 OIDC)
+        # Node 24+: 自带 npm 11.x (OIDC trusted publishing 要求 npm >= 11.5.1)
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '24'
+
+      - name: 确保 npm >= 11.5.1 (OIDC trusted publishing 硬性要求)
+        if: steps.check_published.outputs.already_published != 'true'
+        run: |
+          set -euo pipefail
+          echo "当前 npm: $(npm --version)"
+          npm install -g npm@latest
+          NPMV=$(npm --version)
+          echo "升级后 npm: $NPMV"
+          # npm < 11.5.1 不支持 OIDC trusted publishing:
+          # 它不认识 OIDC 流程, 又找不到 token, 于是报 ENEEDAUTH
+          if [ "$(printf '%s\n' '11.5.1' "$NPMV" | sort -V | head -1)" != '11.5.1' ]; then
+            echo "::error::npm $NPMV < 11.5.1, 无法使用 OIDC trusted publishing"
+            exit 1
+          fi
 
       - name: 预览将要发布的 tarball 内容 (npm pack --dry-run)
         if: steps.check_published.outputs.already_published != 'true'

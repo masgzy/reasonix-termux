@@ -1,13 +1,17 @@
-name: 同步并发布 Termux 源
+name: 同步并发布 (apt + npm)
 
 # ---------------------------------------------------------------------------
 # 自动检测 esengine/DeepSeek-Reasonix 上游 CLI 版本变化
 # 构建 GOOS=android GOARCH=arm64 静态二进制 + deb 包 + apt 源元数据
 # (patch atotto/clipboard 绕过 Android seccomp faccessat2 bug)
-# 发布到本仓库的 orphan 分支 `apt`（类似 gh-pages 模式）
+#
+# 发布双通道:
+#   1) apt orphan 分支  (Termux: pkg install reasonix)
+#   2) npm 包 reasonix-termux (Termux: npm i -g reasonix-termux)
 #
 # 上游:    https://github.com/esengine/DeepSeek-Reasonix
-# 安装源:  deb [trusted=yes] https://raw.githubusercontent.com/<OWNER>/<REPO>/apt stable main
+# apt 源:  deb [trusted=yes] https://raw.githubusercontent.com/<OWNER>/<REPO>/apt stable main
+# npm 包:  https://www.npmjs.com/package/reasonix-termux
 #
 # License: GPL-3.0
 #   本 workflow 及仓库内所有脚本/资源按 GPL-3.0 发布
@@ -155,7 +159,9 @@ jobs:
           fetch-depth: 1
 
       - name: 设置 Go (基于 upstream go.mod)
-        uses: actions/setup-go@v5
+        # setup-go 最新主版本 v7 (最新 release: v7.0.0, 2026-07-16)
+        # 用 @v7 浮动 tag: 自动跟进 v7.x.x 补丁, 不跨大版本 (避免 breaking change)
+        uses: actions/setup-go@v7
         with:
           go-version-file: upstream/go.mod
           cache: true   # 启用 go module 缓存 (基于 upstream/go.sum)
@@ -286,6 +292,18 @@ jobs:
           name: apt-root
           path: apt-root/
           retention-days: 7
+
+      # ----------------------------------------------------------------------
+      # npm 发布需要的原始二进制 (apt 源打 .deb 用的就是这个二进制)
+      # 同一份 build 产物, 双通道发布 (apt + npm), 不重复构建
+      # ----------------------------------------------------------------------
+      - name: 上传 reasonix 二进制为 workflow artifact (供 npm 发布)
+        uses: actions/upload-artifact@v7
+        with:
+          name: reasonix-binary
+          path: build/reasonix
+          retention-days: 7
+          if-no-files-found: error
 
   publish:
     name: 发布到 orphan `apt` 分支
@@ -481,4 +499,175 @@ jobs:
             (仓库 Settings → Pages → Source = apt 分支)
           - Cloudflare Pages: 自定义域名 (Production branch = apt)
           - 直接访问 raw: \`https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${{ env.APT_BRANCH }}/index.html\`
+          EOF
+
+  # ===========================================================================
+  # npm 发布 job
+  # ===========================================================================
+  # 走社区标准: actions/setup-node + npm publish --provenance --access public
+  # 两种认证模式 (择一, 都支持):
+  #
+  #   A) NPM_TOKEN secret 模式 (默认, 兼容性好):
+  #      - 在 npmjs.com 创建 Access Token (类型 "Automation" 或 granular 带 publish 权限)
+  #      - 在 GitHub repo Settings → Secrets and variables → Actions
+  #        添加 Secret: NPM_TOKEN = <上面那个 token>
+  #      - workflow 自动用此 token 走 setup-node registry-url + NODE_AUTH_TOKEN 认证
+  #
+  #   B) npm trusted publishing (OIDC, 更安全, 推荐):
+  #      - 删掉 publish_npm job 里 NODE_AUTH_TOKEN 那行 env
+  #      - 删掉 setup-node 的 registry-url 行 (避免 .npmrc 写空 token 占位符)
+  #      - 在 npmjs.com → reasonix-termux → Settings → Publishing access
+  #        Add GitHub Action → Repository: masgzy/reasonix-termux
+  #                            → Workflow filename: sync-and-publish.yml
+  #      - workflow 已有 id-token: write, OIDC 会自动用
+  #
+  # 参考:
+  #   - https://docs.github.com/actions/publishing-packages/publishing-nodejs-packages
+  #   - https://docs.npmjs.com/trusted-publishers
+  #   - https://docs.npmjs.com/generating-provenance-statements
+  # ===========================================================================
+  publish_npm:
+    name: 发布到 npm (reasonix-termux)
+    needs: [detect, build]
+    if: needs.detect.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write    # npm --provenance 需要 (无论 NPM_TOKEN 还是 OIDC 模式)
+      contents: read
+    env:
+      UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
+    steps:
+      - name: 检出本仓库 (main 分支, 用于读 npm/ 模板)
+        uses: actions/checkout@v7
+
+      - name: 下载 reasonix 二进制
+        uses: actions/download-artifact@v8
+        with:
+          name: reasonix-binary
+          path: staging/bin/
+
+      - name: 确保二进制可执行 + 校验平台
+        run: |
+          set -euo pipefail
+          chmod 0755 staging/bin/reasonix
+          ls -lh staging/bin/reasonix
+          file staging/bin/reasonix
+          # publish_npm job 没装 Go, 用 strings 兜底检查 GOOS=android GOARCH=arm64
+          # (build job 已用 `go version -m` 强校验过, 这里只是双保险)
+          BUILD_GOOS=$(  strings staging/bin/reasonix | grep -m1 -oE 'GOOS=[a-z]+'   | cut -d= -f2 || true )
+          BUILD_GOARCH=$(strings staging/bin/reasonix | grep -m1 -oE 'GOARCH=[a-z0-9]+' | cut -d= -f2 || true )
+          echo "Binary GOOS=$BUILD_GOOS GOARCH=$BUILD_GOARCH"
+          if [ "$BUILD_GOOS" != "android" ] || [ "$BUILD_GOARCH" != "arm64" ]; then
+            echo "::error::二进制不是 android/arm64, npm 包会在 Termux 上 SIGSYS 崩溃, 拒绝发布"
+            exit 1
+          fi
+          echo "✓ 二进制是 android/arm64 (Termux 可用)"
+
+      - name: 复制 npm 模板到 staging/
+        run: |
+          set -euo pipefail
+          cp -v npm/package.json   staging/package.json
+          cp -v npm/README.md      staging/README.md
+          # LICENSE: npm 包只含二进制 (上游 MIT 派生), 所以放本仓库 LICENSE
+          # (本仓库 LICENSE = GPL-3.0, README 已说明 binary 部分遵循上游 MIT)
+          cp -v LICENSE            staging/LICENSE
+          # .npmignore (额外黑名单兜底, 防止意外把开发文件打进去)
+          cp -v npm/.npmignore     staging/.npmignore || true
+          echo "--- staging 目录 ---"
+          find staging -maxdepth 2 -type f -exec ls -lh {} \;
+
+      - name: 设置 package.json 版本 (来自上游 tag)
+        run: |
+          set -euo pipefail
+          # UPSTREAM_TAG 形如 v1.31.3 -> npm version 1.31.3 (去 v 前缀)
+          VER="${UPSTREAM_TAG#v}"
+          cd staging
+          # npm version 会保持 JSON 格式正确 (不要手改 package.json)
+          npm version "$VER" --no-git-tag-version --allow-same-version
+          echo "package.json version 设为 $VER"
+          cat package.json
+
+      - name: 检查 npm 是否已发布此版本
+        id: check_published
+        run: |
+          set -euo pipefail
+          VER="${UPSTREAM_TAG#v}"
+          # 查 npm registry: 200 = 已发布, 404 = 未发布
+          HTTP=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://registry.npmjs.org/reasonix-termux/${VER}")
+          if [ "$HTTP" = "200" ]; then
+            echo "already_published=true"  >> "$GITHUB_OUTPUT"
+            echo "::notice::reasonix-termux@${VER} 已发布, 跳过 publish 步骤"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::reasonix-termux@${VER} 未发布, 准备发布"
+          fi
+
+      - name: Setup Node.js (配置 npm 认证)
+        if: steps.check_published.outputs.already_published != 'true'
+        # setup-node 最新主版本 v7 (最新 release: v7.0.0, 2026-07-14)
+        # 用 @v7 浮动 tag: 自动跟进 v7.x.x 补丁
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org/'
+          # setup-node 会在 ~/.npmrc 写入:
+          #   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
+          # 当 NPM_TOKEN secret 存在时, NODE_AUTH_TOKEN 有值 -> 走 token 认证
+          # 当 NPM_TOKEN 不存在且未配置 OIDC trusted publisher 时, npm publish 会 ENEEDAUTH 失败
+          #   → 需要二选一: 设 NPM_TOKEN secret 或在 npmjs.com 配置 trusted publisher
+
+      - name: 预览将要发布的 tarball 内容 (npm pack --dry-run)
+        if: steps.check_published.outputs.already_published != 'true'
+        run: |
+          cd staging
+          npm pack --dry-run
+
+      - name: 发布到 npm (--provenance)
+        if: steps.check_published.outputs.already_published != 'true'
+        env:
+          # NPM_TOKEN: 在 repo Settings → Secrets → Actions 添加
+          # npmjs.com → Access Tokens → Generate New Token (Automation 或 granular 带 publish 权限)
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd staging
+          # --access public: unscoped 包默认就 public, 显式更安全
+          # --provenance: 启用供应链证明 (需要 id-token: write, 已在 job permissions 配置)
+          npm publish --access public --provenance
+          VER="${UPSTREAM_TAG#v}"
+          echo "✓ 已发布 reasonix-termux@${VER}"
+          echo "  https://www.npmjs.com/package/reasonix-termux/v/${VER}"
+
+      - name: 汇总
+        if: always()
+        run: |
+          VER="${UPSTREAM_TAG#v}"
+          if [ "${{ steps.check_published.outputs.already_published }}" = "true" ]; then
+            STATUS="跳过 (版本已存在)"
+          else
+            STATUS="已发布 (或尝试发布)"
+          fi
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## npm 发布: \`reasonix-termux@${VER}\`
+
+          - 包名: \`reasonix-termux\` (unscoped)
+          - 版本: \`${VER}\` (来自上游 tag \`${UPSTREAM_TAG}\`)
+          - 二进制: android/arm64 静态 ELF (~11MB)
+          - 平台限定: \`os: ["android"], cpu: ["arm64"]\` (npm 在非 Termux 平台拒装, EBADPLATFORM)
+          - provenance: 启用 (id-token: write + npm --provenance)
+          - 状态: ${STATUS}
+
+          ### 安装方式 (在 Termux)
+
+          \`\`\`bash
+          # 需先有 Node.js (Termux: pkg install nodejs)
+          npm install -g reasonix-termux
+          reasonix --version
+          \`\`\`
+
+          ### 与 apt 安装的区别
+
+          - npm: 装到 \`node_modules/.bin\`, 走 Node.js 全局 bin 路径
+          - apt: 装到 \`\$PREFIX/bin/\` (\`/data/data/com.termux/files/usr/bin/\`)
+          - 二者装的是同一个二进制, 选其一即可
           EOF

@@ -1,0 +1,14 @@
+# .npmignore - 控制哪些文件不进 npm tarball
+# package.json 的 "files" 字段是白名单 (bin/, README.md, LICENSE),
+# 此文件作为额外黑名单兜底, 防止意外把开发文件打进去
+
+*.log
+*.bak
+*.tmp
+.git/
+.github/
+scripts/
+site/
+version.txt
+.gitignore
+BUILD_REPORT.md

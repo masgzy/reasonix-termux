@@ -505,21 +505,26 @@ jobs:
   # npm 发布 job
   # ===========================================================================
   # 走社区标准: actions/setup-node + npm publish --provenance --access public
-  # 两种认证模式 (择一, 都支持):
+  # 认证模式: npm trusted publishing (OIDC), 2026 主流推荐
   #
-  #   A) NPM_TOKEN secret 模式 (默认, 兼容性好):
-  #      - 在 npmjs.com 创建 Access Token (类型 "Automation" 或 granular 带 publish 权限)
-  #      - 在 GitHub repo Settings → Secrets and variables → Actions
-  #        添加 Secret: NPM_TOKEN = <上面那个 token>
-  #      - workflow 自动用此 token 走 setup-node registry-url + NODE_AUTH_TOKEN 认证
+  # OIDC 工作原理:
+  #   - workflow 申明 id-token: write 权限 → GitHub Actions 生成 OIDC token
+  #   - npm 端配置 trusted publisher (repo + workflow filename)
+  #   - npm publish --provenance 时, npm CLI 用 OIDC token 换短期 publish token
+  #   - 无长期 NPM_TOKEN secret, 无 token 泄露风险, 自动轮换
   #
-  #   B) npm trusted publishing (OIDC, 更安全, 推荐):
-  #      - 删掉 publish_npm job 里 NODE_AUTH_TOKEN 那行 env
-  #      - 删掉 setup-node 的 registry-url 行 (避免 .npmrc 写空 token 占位符)
-  #      - 在 npmjs.com → reasonix-termux → Settings → Publishing access
-  #        Add GitHub Action → Repository: masgzy/reasonix-termux
-  #                            → Workflow filename: sync-and-publish.yml
-  #      - workflow 已有 id-token: write, OIDC 会自动用
+  # 一次性配置 (在 npmjs.com 上做):
+  #   1. 用包 owner 账号登录 https://www.npmjs.com/package/reasonix-termux/access
+  #   2. Publishing access → Configure GitHub Actions trusted publishing
+  #   3. 填:
+  #        Repository owner:  masgzy
+  #        Repository name:   reasonix-termux
+  #        Workflow filename: sync-and-publish.yml
+  #        Environment:       (留空)
+  #   4. 保存. 后续每次 workflow 跑都会自动用 OIDC 认证
+  #
+  # 关键: 不要给 setup-node 加 registry-url, 否则会在 .npmrc 写空 token 占位符
+  #       干扰 OIDC 流程; 也不要给 publish 步骤加 NODE_AUTH_TOKEN env
   #
   # 参考:
   #   - https://docs.github.com/actions/publishing-packages/publishing-nodejs-packages
@@ -532,7 +537,7 @@ jobs:
     if: needs.detect.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write    # npm --provenance 需要 (无论 NPM_TOKEN 还是 OIDC 模式)
+      id-token: write    # OIDC trusted publishing 必需: 让 GitHub 给 npm 签 OIDC token
       contents: read
     env:
       UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
@@ -603,19 +608,15 @@ jobs:
             echo "::notice::reasonix-termux@${VER} 未发布, 准备发布"
           fi
 
-      - name: Setup Node.js (配置 npm 认证)
+      - name: Setup Node.js
         if: steps.check_published.outputs.already_published != 'true'
         # setup-node 最新主版本 v7 (最新 release: v7.0.0, 2026-07-14)
         # 用 @v7 浮动 tag: 自动跟进 v7.x.x 补丁
+        # 注意: 不传 registry-url, 让 OIDC 流程接管认证
+        #       (传了会在 .npmrc 写空 token 占位符, 干扰 OIDC)
         uses: actions/setup-node@v7
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org/'
-          # setup-node 会在 ~/.npmrc 写入:
-          #   //registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}
-          # 当 NPM_TOKEN secret 存在时, NODE_AUTH_TOKEN 有值 -> 走 token 认证
-          # 当 NPM_TOKEN 不存在且未配置 OIDC trusted publisher 时, npm publish 会 ENEEDAUTH 失败
-          #   → 需要二选一: 设 NPM_TOKEN secret 或在 npmjs.com 配置 trusted publisher
 
       - name: 预览将要发布的 tarball 内容 (npm pack --dry-run)
         if: steps.check_published.outputs.already_published != 'true'
@@ -623,16 +624,14 @@ jobs:
           cd staging
           npm pack --dry-run
 
-      - name: 发布到 npm (--provenance)
+      - name: 发布到 npm (OIDC trusted publishing + --provenance)
         if: steps.check_published.outputs.already_published != 'true'
-        env:
-          # NPM_TOKEN: 在 repo Settings → Secrets → Actions 添加
-          # npmjs.com → Access Tokens → Generate New Token (Automation 或 granular 带 publish 权限)
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd staging
           # --access public: unscoped 包默认就 public, 显式更安全
           # --provenance: 启用供应链证明 (需要 id-token: write, 已在 job permissions 配置)
+          # 不传 NODE_AUTH_TOKEN: 走 OIDC, npm CLI 会用 GitHub Actions 的 OIDC token
+          #                       换短期 publish token (前提: npmjs.com 上已配 trusted publisher)
           npm publish --access public --provenance
           VER="${UPSTREAM_TAG#v}"
           echo "✓ 已发布 reasonix-termux@${VER}"
@@ -654,6 +653,7 @@ jobs:
           - 版本: \`${VER}\` (来自上游 tag \`${UPSTREAM_TAG}\`)
           - 二进制: android/arm64 静态 ELF (~11MB)
           - 平台限定: \`os: ["android"], cpu: ["arm64"]\` (npm 在非 Termux 平台拒装, EBADPLATFORM)
+          - 认证模式: OIDC trusted publishing (无 NPM_TOKEN secret)
           - provenance: 启用 (id-token: write + npm --provenance)
           - 状态: ${STATUS}
 

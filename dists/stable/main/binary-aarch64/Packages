@@ -1,0 +1,20 @@
+Package: reasonix
+Version: 1.39.7
+Architecture: aarch64
+Maintainer: Termux auto-publisher <noreply@github.com>
+Installed-Size: 53184
+Conflicts: reasonix-static
+Replaces: reasonix-static
+Filename: dists/stable/main/binary-aarch64/reasonix_1.39.7_aarch64.deb
+Size: 19189088
+MD5sum: ae005e5b355877ac221e30e7dee72d81
+SHA1: 8a9d0cd963c99811725f27bbb4945cbd7a74f71c
+SHA256: 8f282c722599ef5211fa93b392057331939255e3dfd481db1298c67d54c0db8a
+Section: utils
+Priority: optional
+Homepage: https://github.com/esengine/DeepSeek-Reasonix
+Description: DeepSeek-native AI coding agent for the terminal (Termux build)
+ Cache-first CLI built for Android/Termux from upstream v1.39.7.
+ .
+ Built with GOOS=android GOARCH=arm64 CGO_ENABLED=0 (static ELF).
+

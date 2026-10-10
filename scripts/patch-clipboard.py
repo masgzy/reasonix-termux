@@ -19,6 +19,8 @@ patch 后: 直接固定 termux-clipboard-get/set, 不调 LookPath
 """
 import sys
 import re
+import os
+import stat
 
 PATCH_MARKER = '// Patched by reasonix-termux'
 
@@ -62,6 +64,19 @@ def remove_unused_import(content, pkg):
     return new_content
 
 
+def write_file(path, content):
+    """写入文件; GOMODCACHE 中的文件是只读的 (go 保证模块缓存不可变),
+    需先加写权限, 写完恢复 0444 以维持缓存语义"""
+    try:
+        with open(path, 'w') as f:
+            f.write(content)
+    except PermissionError:
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IROTH)
+        with open(path, 'w') as f:
+            f.write(content)
+        os.chmod(path, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)  # 恢复只读
+
+
 def main():
     if len(sys.argv) != 2:
         print("Usage: patch-clipboard.py <clipboard_unix.go>", file=sys.stderr)
@@ -91,8 +106,7 @@ def main():
     # init() 不再调 os.Getenv → "os" import 变为未使用, 必须移除否则编译失败
     new_content = remove_unused_import(new_content, 'os')
 
-    with open(path, 'w') as f:
-        f.write(new_content)
+    write_file(path, new_content)
 
     print(f"Patched: {path}")
     print(f"Removed {len(content) - len(new_content)} bytes of LookPath calls")

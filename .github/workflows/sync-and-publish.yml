@@ -13,6 +13,15 @@ name: 同步并发布 (apt + npm)
 # apt 源:  deb [trusted=yes] https://raw.githubusercontent.com/<OWNER>/<REPO>/apt stable main
 # npm 包:  https://www.npmjs.com/package/reasonix-termux
 #
+# v2 适配记录 (2026-10):
+#   - 上游 CLI 升级 v2.x 后包结构变化:
+#       internal/config/mutate.go → internal/contract/config/mutate.go
+#       internal/productdocs      → internal/tools/productdocs
+#     因此 patch/ldflags 均改为动态探测路径, 不再硬编码
+#   - Desktop 产品改名 Studio: tag 从 desktop-v* 变为 studio-v*,
+#     CLI tag 过滤改为白名单 ^v[0-9], 防止误取 studio tag
+#   - 官方 Makefile ldflags 改为 -X main.version/gitCommit/buildTimeUTC
+#
 # License: GPL-3.0
 #   本 workflow 及仓库内所有脚本/资源按 GPL-3.0 发布
 #   详见仓库根 LICENSE 文件或 https://www.gnu.org/licenses/gpl-3.0.html
@@ -61,6 +70,7 @@ jobs:
   detect:
     name: 检测上游版本
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       upstream_tag: ${{ steps.check.outputs.upstream_tag }}
       current_tag: ${{ steps.check.outputs.current_tag }}
@@ -82,20 +92,40 @@ jobs:
 
       - name: 查询上游最新 CLI tag
         id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # GitHub API 列出最近 20 个 release (含 CLI 和 Desktop, 按时间倒序)
-          # 过滤掉:
-          #   - prerelease (预发布)
-          #   - desktop-* 开头的 tag (Desktop 版, 我们只跟 CLI)
-          #   - npm-* 开头的 tag (npm 包, 同上)
-          # 取第一个匹配的 (即最新的 CLI stable release)
-          UPSTREAM=$(curl -fsSL \
-            -H "Accept: application/vnd.github+json" \
-            -H "User-Agent: termux-sync-bot" \
-            "https://api.github.com/repos/${UPSTREAM_REPO}/releases?per_page=20" \
-            | jq -r '[.[] | select(.prerelease == false and (.tag_name | test("^(desktop|npm)-") | not))][0].tag_name')
+          set -euo pipefail
+          # GitHub API 列出最近 30 个 release, 取最新的 CLI stable tag
+          #
+          # tag 白名单 (关键鲁棒性修复):
+          #   只接受 ^v[0-9] 开头的 tag, 自动排除:
+          #     - studio-v* (2026-10 起 Desktop 改名 Studio, 旧黑名单 ^desktop- 漏掉了它,
+          #       而它和对应 CLI tag 同一秒创建, 列表顺序不稳定, 有误取的风险)
+          #     - desktop-v* / npm-* (同理由白名单一并排除)
+          #
+          # 认证 + 重试 (定时任务鲁棒性):
+          #   - 用 GITHUB_TOKEN 认证 (5000 req/h), 避免匿名共享 IP 池 60 req/h 被限流
+          #   - 网络抖动 / API 5xx / 限流时重试, 共 3 次机会
+          fetch_latest_tag() {
+            curl -fsSL --max-time 30 \
+              -H "Accept: application/vnd.github+json" \
+              -H "User-Agent: termux-sync-bot" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              "https://api.github.com/repos/${UPSTREAM_REPO}/releases?per_page=30" \
+            | jq -e -r '[.[] | select(.prerelease == false and (.tag_name | test("^v[0-9]")))][0].tag_name'
+          }
+          UPSTREAM=""
+          for i in 1 2 3; do
+            if UPSTREAM=$(fetch_latest_tag); then
+              break
+            fi
+            UPSTREAM=""
+            echo "::warning::查询上游 release 失败 (第 ${i}/3 次), 10s 后重试..."
+            sleep 10
+          done
           if [ -z "$UPSTREAM" ] || [ "$UPSTREAM" = "null" ]; then
-            echo "::error::无法获取上游最新 CLI tag"
+            echo "::error::无法获取上游最新 CLI tag (重试 3 次均失败)"
             exit 1
           fi
           echo "upstream=$UPSTREAM" >> "$GITHUB_OUTPUT"
@@ -104,6 +134,7 @@ jobs:
       - name: 决定是否需要发布
         id: check
         run: |
+          set -euo pipefail
           UP="${{ inputs.tag || steps.upstream.outputs.upstream }}"
           CUR="${{ steps.current.outputs.current }}"
           FORCE="${{ inputs.force || 'false' }}"
@@ -126,6 +157,7 @@ jobs:
     name: 构建二进制 + deb + apt 源
     needs: detect
     if: needs.detect.outputs.should_publish == 'true'
+    timeout-minutes: 40
     # 用普通 ubuntu-latest (amd64) runner 交叉编译即可
     #
     # 历史背景: 早期版本曾用 ubuntu-24.04-arm + termux-docker 镜像构建,
@@ -164,7 +196,9 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version-file: upstream/go.mod
-          cache: true   # 启用 go module 缓存 (基于 upstream/go.sum)
+          cache: true   # 启用 go module 缓存
+          # 缓存依赖文件在 upstream/ 子目录, 不指定会找不到 go.mod 导致缓存永远 miss
+          cache-dependency-path: upstream/go.sum
 
       - name: Patch 源码 (TMPDIR + /tmp 硬编码 + clipboard LookPath)
         working-directory: upstream
@@ -172,30 +206,41 @@ jobs:
           set -euo pipefail
           # Patch 1: TMPDIR + /tmp 硬编码
           # 根因: Reasonix 用 os.MkdirTemp("", ...) → 默认 /tmp
-          #   + internal/config/mutate.go 硬编码 filepath.Join("/", "tmp", ...)
+          #   + 锁文件路径硬编码 /tmp (v1 在 internal/config/mutate.go,
+          #     v2 移到了 internal/contract/config/mutate.go, 硬编码路径曾直接报错)
           # Termux/Android 上 /tmp 只读 → "mkdir /tmp/reasonix-config-locks-...: permission denied"
           # 修复: 1. main() 入口设 TMPDIR=~/.reasonix/tmp/
-          #       2. mutate.go 把硬编码 /tmp 改成 os.TempDir()
+          #       2. 硬编码 /tmp 改成 os.TempDir()
+          # 脚本已改为递归搜索 pattern, 不再依赖具体路径 (v2 重构免疫)
           python3 "$GITHUB_WORKSPACE/scripts/patch-tmpdir.py" .
           echo "--- Patched main() ---"
           sed -n '/^func main/,/^}/p' cmd/reasonix/main.go | head -15
-          echo "--- Patched mutate.go ---"
-          grep -n "reasonix-config-locks" internal/config/mutate.go | head -3
+          echo "--- 验证锁文件 patch ---"
+          if grep -rq 'os.TempDir(), fmt.Sprintf("reasonix-config-locks' --include='*.go' internal/; then
+            grep -rn 'os.TempDir(), fmt.Sprintf("reasonix-config-locks' --include='*.go' internal/ | head -3
+          else
+            echo "::warning::锁文件 /tmp 硬编码 pattern 不存在 (可能上游已修复), 跳过验证"
+          fi
 
           # Patch 2: atotto/clipboard init() 跳过 LookPath
-          # 性能优化 (非必须, 不会 SIGSYS, 但能省启动时间):
+          # 性能优化 (非必须, GOOS=android 时不会 SIGSYS, 但能省启动时间):
           #   原实现 init() 调多次 exec.LookPath (xclip/xsel/wlcopy/...)
-          #   每次 LookPath → findExecutable → Eaccess → Faccessat
-          #   虽然 GOOS=android 时不会调 faccessat2 (不 SIGSYS),
-          #   但仍会走 fstatat fallback, 浪费启动时间
           #   patch 后直接设 termux-clipboard-get/set, 不调 LookPath
-          CLIPBOARD_FILE=$(find . -path '*/atto/clipboard/clipboard_unix.go' 2>/dev/null | head -1)
+          # 源码位置注意: 上游仓库不 vendor 依赖, 在上游 checkout 里永远找不到,
+          #   旧写法 find . 从未命中过 → 改为在 Go module cache (GOMODCACHE) 中定位
+          go mod download github.com/atotto/clipboard || echo "::warning::go mod download clipboard 失败, 尝试从现有缓存查找"
+          MODCACHE=$(go env GOMODCACHE)
+          CLIPBOARD_FILE=$(find "${MODCACHE}"/github.com/atotto -name 'clipboard_unix.go' 2>/dev/null | head -1 || true)
+          # 兜底: 上游若未来 vendor 依赖, checkout 里也能找到
+          if [ -z "$CLIPBOARD_FILE" ]; then
+            CLIPBOARD_FILE=$(find . -path '*/atto/clipboard/clipboard_unix.go' 2>/dev/null | head -1 || true)
+          fi
           if [ -n "$CLIPBOARD_FILE" ]; then
             python3 "$GITHUB_WORKSPACE/scripts/patch-clipboard.py" "$CLIPBOARD_FILE"
             echo "--- Patched $CLIPBOARD_FILE ---"
             sed -n '/^func init/,/^}/p' "$CLIPBOARD_FILE" | head -15
           else
-            echo "::warning::未找到 atotto/clipboard/clipboard_unix.go, 跳过 clipboard patch"
+            echo "::warning::未找到 atotto/clipboard/clipboard_unix.go, 跳过 clipboard patch (可选优化)"
           fi
 
       - name: 交叉编译 (GOOS=android GOARCH=arm64 CGO_ENABLED=0)
@@ -207,13 +252,28 @@ jobs:
 
           mkdir -p ../build
 
+          # -X 注入目标动态探测 (v2 教训: internal/productdocs 移到了
+          # internal/tools/productdocs, 硬编码路径会让 -X 静默失效,
+          # --version 显示 dev 而不报错, 只能靠下面的 host 实测步骤兜底)
+          PRODUCTDOCS_DIR=$(find internal -type d -name productdocs 2>/dev/null | sort | head -1 || true)
+          LDFLAGS="-s -w -X main.version=${TAG} -X main.gitCommit=${COMMIT}"
+          if [ -n "$PRODUCTDOCS_DIR" ]; then
+            LDFLAGS="${LDFLAGS} -X reasonix/${PRODUCTDOCS_DIR}.linkedVersion=${TAG} -X reasonix/${PRODUCTDOCS_DIR}.linkedRevision=${COMMIT}"
+            echo "productdocs 包: ${PRODUCTDOCS_DIR} (注入 linkedVersion/linkedRevision)"
+          else
+            echo "::warning::未找到 productdocs 包, 跳过 linkedVersion 注入"
+          fi
+          echo "LDFLAGS: ${LDFLAGS}"
+          # 传给后面的版本验证步骤复用 (保证两个构建注入参数完全一致)
+          echo "LDFLAGS=${LDFLAGS}" >> "$GITHUB_ENV"
+
           echo "=== go build (host=$(go version)) ==="
           CGO_ENABLED=0 \
           GOOS=android \
           GOARCH=arm64 \
           go build \
             -trimpath \
-            -ldflags "-s -w -X main.version=${TAG} -X reasonix/internal/productdocs.linkedVersion=${TAG} -X reasonix/internal/productdocs.linkedRevision=${COMMIT}" \
+            -ldflags "${LDFLAGS}" \
             -o ../build/reasonix \
             ./cmd/reasonix
 
@@ -263,6 +323,27 @@ jobs:
             echo "(注: 字符串存在不等于一定调用, 但 GOOS=android 时正常应为 0)"
           fi
 
+      - name: 验证版本注入 (host 构建 + --version 实测)
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          # android/arm64 二进制在 host 上跑不了, 但 -X 注入是链接期行为, 与目标平台无关:
+          # 用完全相同的 LDFLAGS 构一个 host 二进制, 实跑 --version 验证版本号真的注入了。
+          # 防止未来上游再挪包导致 -X 路径静默失效时, 发出 --version=dev 的包。
+          echo "=== host 构建 (仅用于验证, 不发布) ==="
+          CGO_ENABLED=0 go build -trimpath -ldflags "${LDFLAGS}" -o ../build/reasonix-host ./cmd/reasonix
+
+          echo "=== 实测 --version ==="
+          VERSION_OUT=$(timeout 60 ../build/reasonix-host --version || true)
+          echo "${VERSION_OUT}"
+          if ! echo "${VERSION_OUT}" | grep -qF "${UPSTREAM_TAG}"; then
+            echo "::error::--version 输出不含 ${UPSTREAM_TAG}, -X 注入失效 (上游可能又改了包路径或版本变量)"
+            echo "实际输出: ${VERSION_OUT}"
+            echo "LDFLAGS: ${LDFLAGS}"
+            exit 1
+          fi
+          echo "✓ 版本注入验证通过: ${VERSION_OUT}"
+
       - name: 打包 .deb
         run: |
           set -euo pipefail
@@ -292,6 +373,7 @@ jobs:
           name: apt-root
           path: apt-root/
           retention-days: 7
+          if-no-files-found: error
 
       # ----------------------------------------------------------------------
       # npm 发布需要的原始二进制 (apt 源打 .deb 用的就是这个二进制)
@@ -309,6 +391,7 @@ jobs:
     name: 发布到 orphan `apt` 分支
     needs: [detect, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       UPSTREAM_TAG: ${{ needs.detect.outputs.upstream_tag }}
     steps:
@@ -450,8 +533,13 @@ jobs:
             echo "version.txt 未变化"
           else
             git commit -m "chore: 已发布版本更新为 ${UPSTREAM_TAG}"
-            # actions/checkout 已配置 token, 直接 push 即可
-            git push
+            # push 带一次重试: 若运行期间远端 main 有新提交, rebase 后重试
+            # (并发组已限制本 workflow 串行, 这里主要防人工 push 撞车)
+            if ! git push; then
+              echo "::warning::push 失败, rebase 远端最新后重试"
+              git pull --rebase origin "${{ github.ref_name }}"
+              git push
+            fi
           fi
 
       - name: 汇总
@@ -536,6 +624,7 @@ jobs:
     needs: [detect, build]
     if: needs.detect.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       id-token: write    # OIDC trusted publishing 必需: 让 GitHub 给 npm 签 OIDC token
       contents: read
